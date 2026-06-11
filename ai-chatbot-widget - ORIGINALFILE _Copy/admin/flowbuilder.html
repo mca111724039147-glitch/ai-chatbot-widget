@@ -3746,14 +3746,7 @@ function toggleMobileMenu() {
       // Save locally to localStorage
       localStorage.setItem('chatbotFlow_' + selectedBotId, JSON.stringify(flowComponents));
       
-      // Trigger Direct File download (without file explorer picker dialog)
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(flowComponents, null, 2));
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", "flow_config.json");
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
+
       
       // Save to server database via API
       fetch('/api/flow', {
