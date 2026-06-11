@@ -1829,26 +1829,35 @@
       const switchEl = document.getElementById(type === 'ai' ? 'sidebarToggleAI' : 'sidebarToggleFlow');
       if (!switchEl) return;
       
-      const isActive = switchEl.classList.toggle('active');
+      // Determine intent from current state (do NOT pre-toggle)
+      const isActive = !switchEl.classList.contains('active');
       
       try {
-        const configRes = await fetch('/api/config/full');
-        const config = await configRes.json();
-        
         let payload = {};
         if (type === 'ai') {
           payload = { enableAI: isActive };
-          showToast(isActive ? '✅ AI Chatbot enabled' : '⚠️ AI Chatbot disabled', 'success');
+          showToast(isActive ? '✅ AI Chatbot enabled — Flow Builder disabled' : '⚠️ AI Chatbot disabled', 'success');
         } else {
           payload = { primaryMode: isActive ? 'flow_builder' : 'ai_chatbot' };
-          showToast(isActive ? '✅ Flow Builder Mode active' : '✅ AI Chatbot Mode active', 'success');
+          showToast(isActive ? '✅ Flow Builder Mode active — AI Chatbot disabled' : '✅ AI Chatbot Mode active', 'success');
         }
         
-        await fetch('/api/config', {
+        const res = await fetch('/api/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        
+        if (res.ok) {
+          const resData = await res.json();
+          const updatedConfig = resData.config;
+          
+          // Sync BOTH switches from the authoritative server response
+          const aiSwitch = document.getElementById('sidebarToggleAI');
+          const flowSwitch = document.getElementById('sidebarToggleFlow');
+          if (aiSwitch) aiSwitch.classList.toggle('active', updatedConfig.enableAI !== false);
+          if (flowSwitch) flowSwitch.classList.toggle('active', updatedConfig.primaryMode === 'flow_builder');
+        }
         
         if (typeof loadConfigData === 'function') {
           loadConfigData();

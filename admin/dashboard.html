@@ -3073,12 +3073,9 @@
       const switchEl = document.getElementById(type === 'ai' ? 'sidebarToggleAI' : 'sidebarToggleFlow');
       if (!switchEl) return;
       
-      const isActive = switchEl.classList.toggle('active');
+      const isActive = !switchEl.classList.contains('active');
       
       try {
-        const configRes = await fetch('/api/config/full');
-        const config = await configRes.json();
-        
         let payload = {};
         if (type === 'ai') {
           payload = { enableAI: isActive };
@@ -3088,14 +3085,29 @@
           showToast(isActive ? '✅ Flow Builder Mode active' : '✅ AI Chatbot Mode active', 'success');
         }
         
-        await fetch('/api/config', {
+        const res = await fetch('/api/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         
-        if (typeof loadConfigData === 'function') {
-          loadConfigData();
+        if (res.ok) {
+          const resData = await res.json();
+          const updatedConfig = resData.config;
+          
+          const aiSwitch = document.getElementById('sidebarToggleAI');
+          const flowSwitch = document.getElementById('sidebarToggleFlow');
+          
+          if (aiSwitch) {
+            aiSwitch.classList.toggle('active', updatedConfig.enableAI !== false);
+          }
+          if (flowSwitch) {
+            flowSwitch.classList.toggle('active', updatedConfig.primaryMode === 'flow_builder');
+          }
+        }
+        
+        if (typeof loadSettings === 'function') {
+          loadSettings();
         }
       } catch (err) {
         console.error('Failed to toggle config:', err);

@@ -976,12 +976,9 @@
       const switchEl = document.getElementById(type === 'ai' ? 'sidebarToggleAI' : 'sidebarToggleFlow');
       if (!switchEl) return;
       
-      const isActive = switchEl.classList.toggle('active');
+      const isActive = !switchEl.classList.contains('active');
       
       try {
-        const configRes = await fetch('/api/config/full');
-        const config = await configRes.json();
-        
         let payload = {};
         if (type === 'ai') {
           payload = { enableAI: isActive };
@@ -991,11 +988,26 @@
           showToast(isActive ? '✅ Flow Builder Mode active' : '✅ AI Chatbot Mode active', 'success');
         }
         
-        await fetch('/api/config', {
+        const res = await fetch('/api/config', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        
+        if (res.ok) {
+          const resData = await res.json();
+          const updatedConfig = resData.config;
+          
+          const aiSwitch = document.getElementById('sidebarToggleAI');
+          const flowSwitch = document.getElementById('sidebarToggleFlow');
+          
+          if (aiSwitch) {
+            aiSwitch.classList.toggle('active', updatedConfig.enableAI !== false);
+          }
+          if (flowSwitch) {
+            flowSwitch.classList.toggle('active', updatedConfig.primaryMode === 'flow_builder');
+          }
+        }
         
         if (typeof loadConfigData === 'function') {
           loadConfigData();
@@ -1044,6 +1056,12 @@ function handleLogout() {
     function selectMode(element) {
       document.querySelectorAll('.mode-card').forEach(el => el.classList.remove('active'));
       element.classList.add('active');
+      
+      const isAI = element.querySelector('h4').textContent.includes('AI Chatbot');
+      const enableAICheckbox = document.getElementById('enable-ai');
+      if (enableAICheckbox) {
+        enableAICheckbox.checked = isAI;
+      }
     }
 
     // Load Configuration Data
@@ -1213,6 +1231,22 @@ function handleLogout() {
         document.body.classList.add('dark-theme');
         const btn = document.getElementById('themeToggleBtn');
         if (btn) btn.innerHTML = '☀️';
+      }
+
+      // Sync enable-ai checkbox changes to the mode cards
+      const enableAICheckbox = document.getElementById('enable-ai');
+      if (enableAICheckbox) {
+        enableAICheckbox.addEventListener('change', (e) => {
+          const isChecked = e.target.checked;
+          document.querySelectorAll('.mode-card').forEach(card => {
+            const isAICard = card.querySelector('h4').textContent.includes('AI Chatbot');
+            if (isAICard === isChecked) {
+              card.classList.add('active');
+            } else {
+              card.classList.remove('active');
+            }
+          });
+        });
       }
 
       loadConfigData();

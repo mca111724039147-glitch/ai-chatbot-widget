@@ -1692,7 +1692,23 @@ app.delete('/api/sessions', (req, res) => {
 app.put('/api/config', (req, res) => {
   try {
     const current  = loadConfig();
-    const updated  = { ...current, ...req.body };
+    
+    // Enforce mutual exclusivity of AI Chatbot and Flow Builder modes
+    let newConfig = { ...req.body };
+    
+    if (newConfig.enableAI !== undefined || newConfig.primaryMode !== undefined) {
+      if (newConfig.primaryMode === 'flow_builder') {
+        newConfig.enableAI = false;
+      } else if (newConfig.primaryMode === 'ai_chatbot') {
+        newConfig.enableAI = true;
+      } else if (newConfig.enableAI === true) {
+        newConfig.primaryMode = 'ai_chatbot';
+      } else if (newConfig.enableAI === false) {
+        newConfig.primaryMode = 'flow_builder';
+      }
+    }
+    
+    const updated  = { ...current, ...newConfig };
     saveConfig(updated);
     res.json({ success: true, config: updated });
   } catch (err) {
