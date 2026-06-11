@@ -2394,25 +2394,27 @@ app.post('/api/payment/verify', async (req, res) => {
         )
       `);
 
-      // Generate unique client ID
-      const clientId = 'cli_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      // Generate unique client ID or retrieve existing one
+      const existing = db.prepare('SELECT client_id FROM clients WHERE email = ?').get(email);
+      let clientId;
 
       // Hash password (in production, use bcrypt)
       const crypto = require('crypto');
       const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
 
-      // Check if email already exists
-      const existing = db.prepare('SELECT id FROM clients WHERE email = ?').get(email);
       if (existing) {
-        return res.status(400).json({ error: 'Email already registered' });
+        clientId = existing.client_id;
+        db.prepare(
+          'UPDATE clients SET company_name = ?, phone = ?, password = ?, plan_id = ?, status = ? WHERE email = ?'
+        ).run(company_name, phone, hashedPassword, plan_id, 'active', email);
+        console.log(`✅ Existing client updated after payment: ${company_name} (${email}) - Plan ${plan_id}`);
+      } else {
+        clientId = 'cli_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        db.prepare(
+          'INSERT INTO clients (client_id, company_name, email, phone, password, plan_id) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(clientId, company_name, email, phone, hashedPassword, plan_id);
+        console.log(`✅ New client registered: ${company_name} (${email}) - Plan ${plan_id}`);
       }
-
-      // Insert new client
-      db.prepare(
-        'INSERT INTO clients (client_id, company_name, email, phone, password, plan_id) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(clientId, company_name, email, phone, hashedPassword, plan_id);
-
-      console.log(`✅ New client registered: ${company_name} (${email}) - Plan ${plan_id}`);
 
       // Send welcome email with credentials
       const plan_name = plan_id === 1 ? 'Basic' : plan_id === 2 ? 'Standard' : 'Premium';
