@@ -1211,10 +1211,11 @@
   "emailNotifications": {
     "enabled": true,
     "adminEmail": "shivaratrimanikanth@gmail.com",
-    "smtpHost": "smtp.gmail.com",
+    "smtpHost": "smtp.resend.com",
     "smtpPort": 587,
-    "smtpUser": "amarangabadukrishnaveni@gmail.com",
-    "smtpPass": "oyyc npzp omgo qayl"
+    "smtpUser": "resend",
+    "smtpPass": "re_your_api_key",
+    "senderEmail": "onboarding@resend.dev"
   },
   "apiKey": "bot_b7cf6025f5562b13b2e2096e59bd1cd5",
   "enforceApiKey": false,

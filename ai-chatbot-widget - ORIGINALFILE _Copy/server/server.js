@@ -77,6 +77,23 @@ function saveConfig(config) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
+// Helper to get SMTP email configuration with environment overrides
+function getEmailConfig() {
+  const config = loadConfig();
+  const emailCfg = config.emailNotifications || {};
+  return {
+    enabled: process.env.EMAIL_ENABLED !== undefined 
+      ? (process.env.EMAIL_ENABLED === 'true') 
+      : (emailCfg.enabled !== false), // default to true if not explicitly false
+    smtpHost: process.env.SMTP_HOST || emailCfg.smtpHost || 'smtp.resend.com',
+    smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : (emailCfg.smtpPort || 587),
+    smtpUser: process.env.SMTP_USER || emailCfg.smtpUser || 'resend',
+    smtpPass: process.env.SMTP_PASS || emailCfg.smtpPass || '',
+    senderEmail: process.env.SENDER_EMAIL || emailCfg.senderEmail || (emailCfg.smtpUser && emailCfg.smtpUser.includes('@') ? emailCfg.smtpUser : 'onboarding@resend.dev'),
+    adminEmail: process.env.ADMIN_EMAIL || emailCfg.adminEmail || ''
+  };
+}
+
 // ---- SQLite Database for Chat History ----------------------
 let db;
 try {
@@ -637,18 +654,22 @@ function restrictDomain(req, res, next) {
 async function sendLeadEmail(lead) {
   try {
     const config = loadConfig();
-    const emailCfg = config.emailNotifications || {};
-    if (!emailCfg.enabled || !emailCfg.smtpUser || !emailCfg.adminEmail) return;
+    const emailCfg = getEmailConfig();
+    if (!emailCfg.enabled || !emailCfg.smtpUser || !emailCfg.adminEmail) {
+      console.warn("⚠️ SMTP credentials or admin email not fully configured, skipping lead email.");
+      return;
+    }
 
     const transporter = nodemailer.createTransport({
       host: emailCfg.smtpHost,
-      port: emailCfg.smtpPort || 587,
+      port: emailCfg.smtpPort,
       secure: emailCfg.smtpPort === 465,
-      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass }
+      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+      tls: { rejectUnauthorized: false }
     });
 
     await transporter.sendMail({
-      from: `"${config.companyName || 'Chatbot'}" <${emailCfg.smtpUser}>`,
+      from: `"${config.companyName || 'Chatbot'}" <${emailCfg.senderEmail}>`,
       to: emailCfg.adminEmail,
       subject: `🎯 New Lead Captured: ${lead.name || lead.email}`,
       html: `
@@ -661,36 +682,52 @@ async function sendLeadEmail(lead) {
             <tr><td style="padding:8px;border-bottom:1px solid #eee;"><b>Page:</b></td><td style="padding:8px;border-bottom:1px solid #eee;">${lead.pageUrl || '-'}</td></tr>
             <tr><td style="padding:8px;"><b>Time:</b></td><td style="padding:8px;">${new Date().toLocaleString()}</td></tr>
           </table>
-          <p style="margin-top:20px;color:#888;font-size:12px;">Captured by ${config.botName} AI Chatbot</p>
+          <p style="margin-top:20px;color:#888;font-size:12px;">Captured by ${config.botName || 'AI'} AI Chatbot</p>
         </div>
       `
     });
     console.log('Lead email sent to', emailCfg.adminEmail);
   } catch (err) {
-    console.error('Email send failed:', err.message);
+    console.error('❌ Failed to send lead email:', err);
+    throw err;
   }
 }
 
 // Welcome email notification to client
 async function sendWelcomeEmail(client, plainPassword, req) {
+  const companyName = client.company_name;
+  const email = client.email;
+  console.log(`[EMAIL] 🚀 Triggered sendWelcomeEmail() for client: ${companyName} (${email})`);
+
   try {
     const config = loadConfig();
-    const emailCfg = config.emailNotifications || {};
-    if (!emailCfg.smtpUser) {
-      console.warn("⚠️ SMTP credentials not fully configured, skipping welcome email.");
-      return;
+    const emailCfg = getEmailConfig();
+    console.log(`[EMAIL] Loaded config: enabled=${emailCfg.enabled}, host=${emailCfg.smtpHost}, port=${emailCfg.smtpPort}, user=${emailCfg.smtpUser}, sender=${emailCfg.senderEmail}, admin=${emailCfg.adminEmail}`);
+
+    if (!emailCfg.enabled || !emailCfg.smtpUser) {
+      console.warn("⚠️ SMTP credentials not fully configured or email notifications disabled, skipping welcome email.");
+      return { success: false, error: 'Email notifications disabled or SMTP credentials not configured' };
     }
 
+    console.log(`[EMAIL] Initializing SMTP transporter...`);
     const transporter = nodemailer.createTransport({
       host: emailCfg.smtpHost,
-      port: emailCfg.smtpPort || 587,
+      port: emailCfg.smtpPort,
       secure: emailCfg.smtpPort === 465,
-      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass }
+      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+      tls: { rejectUnauthorized: false }
     });
 
-    const protocol = req ? req.protocol : 'http';
-    const host = req ? req.get('host') : 'localhost:4000';
-    const loginUrl = `${protocol}://${host}/admin/login.html`;
+    // Resolve login URL: Use PUBLIC_URL if specified, otherwise fall back to host headers
+    let loginUrl;
+    if (process.env.PUBLIC_URL) {
+      loginUrl = `${process.env.PUBLIC_URL.replace(/\/$/, '')}/admin/login.html`;
+    } else {
+      const protocol = req ? req.protocol : 'http';
+      const host = req ? req.get('host') : 'localhost:4000';
+      loginUrl = `${protocol}://${host}/admin/login.html`;
+    }
+    console.log(`[EMAIL] Generated login URL: ${loginUrl}`);
 
     const companyName = client.company_name;
     const email = client.email;
@@ -871,16 +908,17 @@ async function sendWelcomeEmail(client, plainPassword, req) {
 </html>
 `;
 
-    await transporter.sendMail({
-      from: `"GAdigital Solution" <${emailCfg.smtpUser}>`,
+    console.log(`[EMAIL] Attempting to send welcome email from "${emailCfg.senderEmail}" to "${email}"...`);
+    const info = await transporter.sendMail({
+      from: `"GAdigital Solution" <${emailCfg.senderEmail}>`,
       to: email,
       subject: `🚀 Welcome to GAdigital Solution - Your Account is Ready!`,
       html: mailHtml
     });
-    console.log(`✉️ Welcome email sent successfully to ${email} for client ${companyName}`);
+    console.log(`[EMAIL] ✉️ Welcome email sent successfully to ${email} for client ${companyName}. MessageID: ${info.messageId}`);
     return { success: true };
   } catch (err) {
-    console.error('❌ Failed to send welcome email:', err.message);
+    console.error('[EMAIL] ❌ Failed to send welcome email:', err);
     return { success: false, error: err.message };
   }
 }
@@ -1458,7 +1496,8 @@ app.post('/api/lead', (req, res) => {
   }
 
   // Send email notification to admin (async, non-blocking)
-  sendLeadEmail({ name: safeName, email: safeEmail, phone: safePhone, pageUrl: safeUrl });
+  sendLeadEmail({ name: safeName, email: safeEmail, phone: safePhone, pageUrl: safeUrl })
+    .catch(err => console.error('❌ Async lead email notification failed:', err));
 
   res.json({ success: true });
 });
@@ -2250,16 +2289,17 @@ app.post('/api/complaint', (req, res) => {
   // Send notification email (reuse sendLeadEmail-like path)
   try {
     const config = loadConfig();
-    const emailCfg = config.emailNotifications || {};
+    const emailCfg = getEmailConfig();
     if (emailCfg.enabled && emailCfg.smtpUser && emailCfg.adminEmail) {
       const transporter = nodemailer.createTransport({
         host: emailCfg.smtpHost,
-        port: emailCfg.smtpPort || 587,
+        port: emailCfg.smtpPort,
         secure: emailCfg.smtpPort === 465,
-        auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass }
+        auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+        tls: { rejectUnauthorized: false }
       });
       transporter.sendMail({
-        from: `"${config.companyName || 'Chatbot'}" <${emailCfg.smtpUser}>`,
+        from: `"${config.companyName || 'Chatbot'}" <${emailCfg.senderEmail}>`,
         to: emailCfg.adminEmail,
         subject: `⚠️ New Complaint: ${safeSubject || safeCategory}`,
         html: `
@@ -2272,9 +2312,15 @@ app.post('/api/complaint', (req, res) => {
               <tr><td style="padding:8px;"><b>Issue:</b></td><td style="padding:8px;">${safeMessage}</td></tr>
             </table>
           </div>`
-      }).catch(e => console.error('Complaint email failed:', e.message));
+      }).then(() => {
+        console.log(`✉️ Complaint email sent successfully to ${emailCfg.adminEmail}`);
+      }).catch(e => console.error('❌ Complaint email failed:', e));
+    } else {
+      console.warn("⚠️ SMTP credentials or admin email not fully configured, skipping complaint email.");
     }
-  } catch (e) { /* email optional */ }
+  } catch (e) {
+    console.error('❌ Error initializing complaint email transporter:', e);
+  }
 
   res.json({ success: true, ticketId: 'CMP-' + Date.now().toString(36).toUpperCase() });
 });
@@ -2299,16 +2345,20 @@ app.put('/api/complaint/:id/status', (req, res) => {
 app.post('/api/payment/verify', async (req, res) => {
   const { company_name, email, phone, password, plan_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
 
-  // Verify Razorpay signature if payment details are provided
-  if (razorpay_payment_id && razorpay_order_id && razorpay_signature) {
-    const generated_signature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-      .update(razorpay_order_id + "|" + razorpay_payment_id)
-      .digest('hex');
-      
-    if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({ error: 'Invalid payment signature' });
-    }
+  // Enforce Razorpay payment details are present and verify signature
+  if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+    console.error('❌ Payment verification failed: Missing Razorpay payment parameters.');
+    return res.status(400).json({ error: 'Payment verification failed: Missing Razorpay credentials.' });
+  }
+
+  const generated_signature = crypto
+    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(razorpay_order_id + "|" + razorpay_payment_id)
+    .digest('hex');
+    
+  if (generated_signature !== razorpay_signature) {
+    console.error('❌ Payment verification failed: Invalid signature.');
+    return res.status(400).json({ error: 'Invalid payment signature' });
   }
 
 

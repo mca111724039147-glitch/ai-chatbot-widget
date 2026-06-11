@@ -366,41 +366,6 @@ function closeRazorpayModal() {
 }
 
 // --- Payment Processing Logic ---
-async function simulatePaymentSuccess(pendingData) {
-  const continueBtn = document.querySelector('.rzp-cards-continue');
-  const overlay = document.getElementById('rzpOverlay');
-  const loadingOverlay = document.getElementById('loading-overlay');
-  
-  if (loadingOverlay) {
-    loadingOverlay.style.display = 'flex';
-    const label = loadingOverlay.querySelector('div:last-child');
-    if (label) label.textContent = 'Simulating payment success...';
-  }
-  
-  try {
-    // Send only registration fields to skip signature check on server
-    const verifyRes = await fetch('/api/payment/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pendingData)
-    });
-    const verifyData = await verifyRes.json();
-    
-    if (verifyRes.ok && verifyData.success) {
-      if (overlay) overlay.classList.remove('show');
-      showSuccessModal(pendingData);
-    } else {
-      alert('Registration Failed: ' + (verifyData.error || 'Unknown error'));
-      if (continueBtn) { continueBtn.disabled = false; continueBtn.innerHTML = 'Continue'; }
-    }
-  } catch(err) {
-    console.error(err);
-    alert('Error during registration simulation.');
-    if (continueBtn) { continueBtn.disabled = false; continueBtn.innerHTML = 'Continue'; }
-  } finally {
-    if (loadingOverlay) loadingOverlay.style.display = 'none';
-  }
-}
 
 async function rzpContinue() {
   if (!window._pendingPurchase) return;
@@ -410,15 +375,6 @@ async function rzpContinue() {
   if (continueBtn) {
     continueBtn.disabled = true;
     continueBtn.innerHTML = 'Processing...';
-  }
-
-  // Check if Sandbox/Demo Mode is active
-  const sandboxCheckbox = document.getElementById('rzpSandboxCheckbox');
-  const isSandbox = sandboxCheckbox ? sandboxCheckbox.checked : true;
-  
-  if (isSandbox) {
-    await simulatePaymentSuccess(pendingData);
-    return;
   }
 
   try {
@@ -494,16 +450,8 @@ async function rzpContinue() {
     const rzp = new window.Razorpay(options);
     rzp.on('payment.failed', function (response){
       console.log('Payment failed:', response.error);
-      const confirmBypass = confirm(
-        'Payment could not be completed via Razorpay.\nReason: ' + response.error.description + 
-        '\n\nWould you like to simulate a successful payment in Sandbox Mode instead?'
-      );
-      
-      if (confirmBypass) {
-        simulatePaymentSuccess(pendingData);
-      } else {
-        if (continueBtn) { continueBtn.disabled = false; continueBtn.innerHTML = 'Continue'; }
-      }
+      alert('Payment could not be completed via Razorpay.\nReason: ' + response.error.description);
+      if (continueBtn) { continueBtn.disabled = false; continueBtn.innerHTML = 'Continue'; }
     });
     rzp.open();
     
