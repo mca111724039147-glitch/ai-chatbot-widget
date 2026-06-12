@@ -1318,10 +1318,20 @@ app.get('/api/stats', (req, res) => {
 
 // POST /api/chat — Main chat endpoint
 app.post('/api/chat', restrictDomain, checkApiKey, rateLimit, async (req, res) => {
-  let { message, sessionId, file, pageUrl, botId, widgetVersion } = req.body;
+  let { message, sessionId, file, pageUrl, botId, widgetVersion, saveOnly, role } = req.body;
 
   if (!message || !sessionId) {
     return res.status(400).json({ error: 'message and sessionId are required' });
+  }
+
+  if (saveOnly) {
+    if (db) {
+      db.prepare('INSERT OR IGNORE INTO sessions (session_id) VALUES (?)').run(sessionId);
+      db.prepare('UPDATE sessions SET bot_id = ?, widget_version = ?, last_user_msg_at = CURRENT_TIMESTAMP WHERE session_id = ?')
+        .run(botId || 'default', widgetVersion || '', sessionId);
+    }
+    saveMessage(sessionId, role || 'user', message, file);
+    return res.json({ success: true });
   }
 
   // Sanitize input

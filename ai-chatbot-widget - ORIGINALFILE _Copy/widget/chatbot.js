@@ -1069,6 +1069,10 @@
     }
 
     saveToLocal(sender, text);
+
+    if (flowIsActive) {
+      logMessageToServer(sender === 'user' ? 'user' : 'assistant', text, options.file);
+    }
   }
 
   function renderExtraHtml(bubble, options) {
@@ -1193,6 +1197,40 @@
     } catch (e) {}
   }
 
+  async function logMessageToServer(role, content, file = null) {
+    if (!SESSION_ID) return;
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (API_KEY) headers['X-Bot-Key'] = API_KEY;
+
+      let fileToSend = null;
+      if (file) {
+        // file dataUrl, name, type format matches fileToSend
+        fileToSend = {
+          dataUrl: file.dataUrl || '',
+          name: file.name || '',
+          type: file.type || ''
+        };
+      }
+
+      await fetch(`${SERVER_URL}/api/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          message: content,
+          sessionId: SESSION_ID,
+          role: role,
+          saveOnly: true,
+          botId: BOT_ID,
+          widgetVersion: WIDGET_VERSION,
+          file: fileToSend
+        })
+      });
+    } catch (e) {
+      console.warn('Chatbot: Failed to log message to server:', e);
+    }
+  }
+
   // ---- Send Message -----------------------------------------
   let pendingFile = null;
 
@@ -1215,7 +1253,7 @@
       const comp = flowComponents[flowCurrentStepIndex];
       if (comp) {
         disableLastFlowButtons();
-        handleFlowAnswer(comp.id, text);
+        handleFlowAnswer(comp.id, text, null, true);
         return;
       }
     }
@@ -2249,11 +2287,15 @@
     }
   }
 
-  function handleFlowAnswer(compId, answerText, rawSelectedArray = null) {
+  function handleFlowAnswer(compId, answerText, rawSelectedArray = null, alreadyRendered = false) {
     const comp = flowComponents.find(c => c.id === compId);
     if (!comp) return;
     
     flowAnswers[comp.label] = answerText;
+    
+    if (!alreadyRendered) {
+      addMessage(answerText, 'user');
+    }
     
     if (comp.type === 'email') {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
