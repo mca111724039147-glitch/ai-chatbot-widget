@@ -18,7 +18,7 @@
   const SERVER_URL = scriptTag?.getAttribute('data-server') || window.location.origin;
   const BOT_ID     = scriptTag?.getAttribute('data-bot-id') || 'default';
   const API_KEY    = scriptTag?.getAttribute('data-api-key') || '';
-  const SESSION_ID = getSessionId();
+  let SESSION_ID = '';
 
   let CONFIG = {
     botName: 'AI Assistant',
@@ -39,8 +39,8 @@
   let isFullscreen = false;
   let isSearchOpen = false;
   let chatIsOpen = false;
-  let userEmail = sessionStorage.getItem('chatbot_user_email') || '';
-  let emailVerified = !!userEmail;
+  let userEmail = '';
+  let emailVerified = false;
   let userInteractions = parseInt(localStorage.getItem('chatbot_interactions') || '0');
   let leadCaptured = localStorage.getItem('chatbot_lead_captured') === 'true';
   let pageUrl = window.location.href;
@@ -867,7 +867,7 @@
           <button id="chatbot-search-close">&times;</button>
         </div>
 
-        <div id="chatbot-toolbar">
+        <div id="chatbot-toolbar" style="${!emailVerified && CONFIG.emailCapture ? 'display: none;' : ''}">
           <div>
             <label style="font-size:11px;opacity:0.7;">${t('langLabel')}: </label>
             <select id="chatbot-lang">${langOptions}</select>
@@ -1679,6 +1679,16 @@
     sessionStorage.setItem('chatbot_user_email', email);
     localStorage.removeItem('chatbot_user_email'); // Clean up legacy cached email
 
+    // Generate a fresh session ID for this new chat session
+    SESSION_ID = 'sess_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('chatbot_session_id', SESSION_ID);
+
+    // Clear messages UI for a fresh session
+    const msgsContainer = document.getElementById('chatbot-messages');
+    if (msgsContainer) msgsContainer.innerHTML = '';
+    messageCount = 0;
+    ratingGiven = false;
+
     // Register email on server
     try {
       await fetch(`${SERVER_URL}/api/register`, {
@@ -1712,6 +1722,9 @@
     document.getElementById('chatbot-suggestions').style.display = '';
     document.getElementById('chatbot-input-area').style.display = 'flex';
     document.getElementById('chatbot-shortcuts-hint').style.display = '';
+
+    const toolbar = document.getElementById('chatbot-toolbar');
+    if (toolbar) toolbar.style.display = 'flex';
 
     // Show the header action buttons
     const buttons = ['btn-handoff', 'btn-clear', 'btn-search', 'btn-fullscreen', 'btn-complaint', 'btn-darkmode', 'btn-export'];
@@ -2042,6 +2055,7 @@
         ratingGiven = false;
         userEmail = '';
         emailVerified = false;
+        SESSION_ID = '';
         userInteractions = 0;
         leadCaptured = false;
         playSound('click');
@@ -2053,6 +2067,9 @@
           document.getElementById('chatbot-suggestions').style.display = 'none';
           document.getElementById('chatbot-input-area').style.display = 'none';
           document.getElementById('chatbot-shortcuts-hint').style.display = 'none';
+
+          const toolbar = document.getElementById('chatbot-toolbar');
+          if (toolbar) toolbar.style.display = 'none';
 
           // Hide header action buttons
           const buttons = ['btn-handoff', 'btn-clear', 'btn-search', 'btn-fullscreen', 'btn-complaint', 'btn-darkmode', 'btn-export'];
@@ -2398,6 +2415,19 @@
     }
     injectStyles();
     buildWidget();
+
+    if (CONFIG.emailCapture) {
+      // Force clean slate for onboarding flow
+      localStorage.removeItem('chatbot_history');
+      localStorage.removeItem('chatbot_session_id');
+      localStorage.removeItem('chatbot_user_email');
+      sessionStorage.removeItem('chatbot_user_email');
+      userEmail = '';
+      emailVerified = false;
+      SESSION_ID = '';
+    } else {
+      SESSION_ID = getSessionId();
+    }
 
     if (CONFIG.primaryMode === 'flow_builder') {
       try {
