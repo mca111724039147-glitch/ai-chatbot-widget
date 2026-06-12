@@ -377,6 +377,11 @@ function saveMessage(sessionId, role, content, file, meta = {}) {
   }
 }
 
+function saveAssistantMessage(sessionId, content, source = '', responseMs = 0) {
+  if (!content) return;
+  saveMessage(sessionId, 'assistant', content, null, { source, responseMs });
+}
+
 function getHistory(sessionId, limit = 20) {
   if (db) {
     return db.prepare(
@@ -397,12 +402,14 @@ function getAllSessions() {
       ORDER BY s.updated_at DESC
     `).all();
   }
-  return Object.keys(memoryStore).map(id => ({
-    session_id: id,
-    message_count: memoryStore[id].length,
-    created_at: memoryStore[id][0]?.timestamp,
-    updated_at: memoryStore[id][memoryStore[id].length - 1]?.timestamp
-  }));
+  return Object.keys(memoryStore)
+    .filter(id => Array.isArray(memoryStore[id]) && memoryStore[id].length > 0)
+    .map(id => ({
+      session_id: id,
+      message_count: memoryStore[id].length,
+      created_at: memoryStore[id][0]?.timestamp,
+      updated_at: memoryStore[id][memoryStore[id].length - 1]?.timestamp
+    }));
 }
 
 // ---- OpenAI Client -----------------------------------------
@@ -1432,16 +1439,20 @@ app.post('/api/chat', restrictDomain, checkApiKey, rateLimit, async (req, res) =
   // Check if AI is enabled in config
   if (config.enableAI === false) {
     console.log('⚠️ AI is disabled in config');
+    const reply = "I couldn't find an answer. Please contact support.";
+    saveAssistantMessage(sessionId, reply, 'disabled', Date.now() - startTime);
     return res.json({ 
-      reply: "I couldn't find an answer. Please contact support.", 
+      reply,
       source: 'disabled' 
     });
   }
   
   if (!geminiModel) {
     console.error('❌ Gemini AI not initialized! Check GEMINI_API_KEY in .env');
+    const reply = "I'm currently unable to process your request. Please try again later.";
+    saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
     return res.json({ 
-      reply: "I'm currently unable to process your request. Please try again later.", 
+      reply,
       source: 'error' 
     });
   }
@@ -1452,22 +1463,23 @@ app.post('/api/chat', restrictDomain, checkApiKey, rateLimit, async (req, res) =
     
     if (geminiReply && geminiReply.trim()) {
       console.log('✅ Gemini AI response received');
-      saveMessage(sessionId, 'assistant', geminiReply, null, {
-        source: 'gemini',
-        responseMs: Date.now() - startTime
-      });
+      saveAssistantMessage(sessionId, geminiReply, 'gemini', Date.now() - startTime);
       return res.json({ reply: geminiReply, source: 'gemini' });
     } else {
       console.error('❌ Gemini returned empty response');
+      const reply = "I'm currently unable to process your request. Please try again later.";
+      saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
       return res.json({ 
-        reply: "I'm currently unable to process your request. Please try again later.", 
+        reply,
         source: 'error' 
       });
     }
   } catch (err) {
     console.error('❌ Gemini Error:', err.message);
+    const reply = "I'm currently unable to process your request. Please try again later.";
+    saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
     return res.json({ 
-      reply: "I'm currently unable to process your request. Please try again later.", 
+      reply,
       source: 'error' 
     });
   }

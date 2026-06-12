@@ -2246,10 +2246,16 @@
       }
     }
     else if (comp.type === 'mobile') {
-      const mobileRegex = /^\+?[0-9\s\-]{8,15}$/;
-      if (!mobileRegex.test(answerText.trim())) {
-        addMessage("⚠️ Invalid phone number format. Please try again.", 'bot', {});
-        return;
+      // Allow 'skip' to bypass optional phone steps
+      if (answerText.trim().toLowerCase() === 'skip') {
+        // fall through to proceed to next step
+      } else {
+        // Accept: 10-digit Indian, international with +, spaces, dashes
+        const mobileRegex = /^\+?[0-9][0-9\s\-]{6,17}$/;
+        if (!mobileRegex.test(answerText.trim())) {
+          addMessage("⚠️ Please enter a valid phone number (e.g. 9876543210 or +91-98765-43210). Type 'skip' to skip.", 'bot', {});
+          return;
+        }
       }
     }
     else if (comp.type === 'number') {

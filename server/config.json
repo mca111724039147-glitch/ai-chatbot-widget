@@ -1220,6 +1220,6 @@
   "apiKey": "bot_b7cf6025f5562b13b2e2096e59bd1cd5",
   "enforceApiKey": false,
   "semanticSearch": true,
-  "primaryMode": "flow_builder",
+  "primaryMode": "ai_chatbot",
   "enableDefaultFallback": true
 }
