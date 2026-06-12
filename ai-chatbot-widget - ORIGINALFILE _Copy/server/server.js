@@ -1631,6 +1631,16 @@ app.get('/api/history/:sessionId', (req, res) => {
   res.json(history);
 });
 
+app.get('/api/debug-db', (req, res) => {
+  if (db) {
+    const sessions = db.prepare('SELECT * FROM sessions').all();
+    const chat_history = db.prepare('SELECT * FROM chat_history').all();
+    const users = db.prepare('SELECT * FROM users').all();
+    return res.json({ sessions, chat_history, users });
+  }
+  res.json({ error: 'No database connected' });
+});
+
 // GET /api/sessions — Admin: list all sessions
 app.get('/api/sessions', (req, res) => {
   res.json(getAllSessions());
