@@ -1935,7 +1935,7 @@
         
         <div class="live-preview-container">
           <!-- Widget Wrapper Mockup (toggled by the FAB) -->
-          <div class="preview-widget-wrapper" id="previewWidget">
+          <div class="preview-widget-wrapper open" id="previewWidget">
             <!-- Widget Header -->
             <div class="widget-header">
               <div class="widget-header-left">
@@ -2000,13 +2000,13 @@
           </div>
           
           <!-- Floating Action Button -->
-          <div class="preview-floating-btn" id="widgetFAB" onclick="toggleWidget()">
+          <div class="preview-floating-btn active" id="widgetFAB" onclick="toggleWidget()">
             <!-- Default closed state icon: chat bubble -->
-            <svg id="fabChatIcon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg id="fabChatIcon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
             <!-- Open state icon: X (hidden by default) -->
-            <svg id="fabCloseIcon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+            <svg id="fabCloseIcon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display: block;">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
@@ -3153,10 +3153,16 @@ function toggleMobileMenu() {
           normalizeFlowComponents();
           componentIdCounter = flowComponents.length > 0 ? Math.max(...flowComponents.map(c => c.id)) + 1 : 1;
           renderFlowCards();
+          if (typeof renderLivePreview === 'function') {
+            renderLivePreview();
+          }
           showToast('✅ Restored last saved flow', 'success');
         } else {
           flowComponents = [];
           renderFlowCards();
+          if (typeof renderLivePreview === 'function') {
+            renderLivePreview();
+          }
           showToast('No saved flow found. Cleared canvas.', 'info');
         }
       }
@@ -3743,6 +3749,9 @@ function toggleMobileMenu() {
     function saveFlowState() {
       const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
       localStorage.setItem('chatbotFlow_' + selectedBotId, JSON.stringify(flowComponents));
+      if (typeof renderLivePreview === 'function') {
+        renderLivePreview();
+      }
     }
 
     function saveFlow() {
@@ -3977,6 +3986,10 @@ function toggleMobileMenu() {
           componentIdCounter = Math.max(...flowComponents.map(c => c.id)) + 1;
           renderFlowCards();
         }
+      }
+      
+      if (typeof renderLivePreview === 'function') {
+        renderLivePreview();
       }
 
       const bannerDismissed = localStorage.getItem('bannerDismissed');
