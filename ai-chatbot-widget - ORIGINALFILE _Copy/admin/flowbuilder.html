@@ -2280,7 +2280,7 @@
         // Filter Flow Builder bots
         const flowBots = bots.filter(b => b.type === 'flow');
         
-        let currentBotId = localStorage.getItem('selectedBotId') || 'default';
+        let currentBotId = localStorage.getItem('selectedFlowBotId') || 'default';
         let currentBotName = 'Select Chatbot';
         
         // Find current bot
@@ -2291,7 +2291,7 @@
         } else if (currentBotId === 'default') {
           if (flowBots.length > 0) {
             currentBotId = flowBots[0].bot_id;
-            localStorage.setItem('selectedBotId', currentBotId);
+            localStorage.setItem('selectedFlowBotId', currentBotId);
             currentBotApiKey = flowBots[0].api_key;
             currentBotName = flowBots[0].name;
           } else {
@@ -2300,11 +2300,11 @@
         } else {
           if (flowBots.length > 0) {
             currentBotId = flowBots[0].bot_id;
-            localStorage.setItem('selectedBotId', currentBotId);
+            localStorage.setItem('selectedFlowBotId', currentBotId);
             currentBotApiKey = flowBots[0].api_key;
             currentBotName = flowBots[0].name;
           } else {
-            localStorage.setItem('selectedBotId', 'default');
+            localStorage.setItem('selectedFlowBotId', 'default');
             currentBotId = 'default';
             currentBotName = 'Select Chatbot';
           }
@@ -2352,7 +2352,7 @@
             item.addEventListener('click', function(e) {
               e.stopPropagation();
               const botId = this.getAttribute('data-bot-id');
-              localStorage.setItem('selectedBotId', botId);
+              localStorage.setItem('selectedFlowBotId', botId);
               window.location.reload();
             });
           });
@@ -2381,7 +2381,7 @@
 
     // Embed Script Modal controls
     function showEmbedScriptModal() {
-      const botId = localStorage.getItem('selectedBotId') || 'default';
+      const botId = localStorage.getItem('selectedFlowBotId') || 'default';
       const apiKey = currentBotApiKey || defaultApiKey;
       const serverUrl = window.location.origin;
       
@@ -3146,7 +3146,7 @@ function toggleMobileMenu() {
 
     function revertFlow() {
       if (confirm('Are you sure you want to revert all unsaved changes?')) {
-        const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
+        const selectedBotId = localStorage.getItem('selectedFlowBotId') || 'default';
         const savedFlow = localStorage.getItem('chatbotFlow_' + selectedBotId);
         if (savedFlow) {
           flowComponents = JSON.parse(savedFlow);
@@ -3747,7 +3747,7 @@ function toggleMobileMenu() {
     }
 
     function saveFlowState() {
-      const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
+      const selectedBotId = localStorage.getItem('selectedFlowBotId') || 'default';
       localStorage.setItem('chatbotFlow_' + selectedBotId, JSON.stringify(flowComponents));
       if (typeof renderLivePreview === 'function') {
         renderLivePreview();
@@ -3760,7 +3760,7 @@ function toggleMobileMenu() {
         return;
       }
       
-      const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
+      const selectedBotId = localStorage.getItem('selectedFlowBotId') || 'default';
       // Save locally to localStorage
       localStorage.setItem('chatbotFlow_' + selectedBotId, JSON.stringify(flowComponents));
       
@@ -3771,7 +3771,7 @@ function toggleMobileMenu() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          botId: localStorage.getItem('selectedBotId') || 'default',
+          botId: localStorage.getItem('selectedFlowBotId') || 'default',
           components: flowComponents
         })
       })
@@ -3804,7 +3804,7 @@ function toggleMobileMenu() {
           normalizeFlowComponents();
           componentIdCounter = flowComponents.length > 0 ? Math.max(...flowComponents.map(c => c.id)) + 1 : 1;
           
-          const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
+          const selectedBotId = localStorage.getItem('selectedFlowBotId') || 'default';
           // Save to localStorage
           localStorage.setItem('chatbotFlow_' + selectedBotId, JSON.stringify(flowComponents));
           
@@ -3819,7 +3819,7 @@ function toggleMobileMenu() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              botId: localStorage.getItem('selectedBotId') || 'default',
+              botId: localStorage.getItem('selectedFlowBotId') || 'default',
               components: flowComponents
             })
           })
@@ -3901,7 +3901,7 @@ function toggleMobileMenu() {
         if (res.ok && data.success) {
           alert('Flow Builder bot "' + name + '" created successfully!');
           closeCreateBotModal();
-          localStorage.setItem('selectedBotId', data.bot_id);
+          localStorage.setItem('selectedFlowBotId', data.bot_id);
           window.location.reload();
         } else {
           alert(data.message || 'Failed to create bot: ' + (data.error || 'Unknown error'));
@@ -3948,7 +3948,7 @@ function toggleMobileMenu() {
       }
 
       // Fetch flow from server
-      const selectedBotId = localStorage.getItem('selectedBotId') || 'default';
+      const selectedBotId = localStorage.getItem('selectedFlowBotId') || 'default';
       try {
         const flowRes = await fetch('/api/flow?botId=' + selectedBotId);
         if (flowRes.ok) {

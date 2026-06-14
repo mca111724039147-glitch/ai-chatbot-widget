@@ -2174,7 +2174,7 @@ function toggleMobileMenu() {
     // Load knowledge chunks from API
     async function loadChunks() {
       try {
-        const currentBotId = localStorage.getItem('selectedBotId') || 'default';
+        const currentBotId = localStorage.getItem('selectedAiBotId') || 'default';
         const response = await fetch(`/api/knowledge?botId=${encodeURIComponent(currentBotId)}`);
         allChunks = await response.json();
         
@@ -2317,7 +2317,7 @@ function toggleMobileMenu() {
       if (!confirm('⚠️ WARNING: This will permanently delete ALL trained knowledge chunks! Are you sure?')) return;
       
       try {
-        const botId = localStorage.getItem('selectedBotId') || 'default';
+        const botId = localStorage.getItem('selectedAiBotId') || 'default';
         const response = await fetch(`/api/knowledge?botId=${encodeURIComponent(botId)}`, {
           method: 'DELETE'
         });
@@ -2348,7 +2348,7 @@ function toggleMobileMenu() {
       statusEl.innerHTML = '<div class="spinner"></div> Scraping website and training AI...';
 
       try {
-        const botId = localStorage.getItem('selectedBotId') || 'default';
+        const botId = localStorage.getItem('selectedAiBotId') || 'default';
         const response = await fetch(`${API_BASE}/api/knowledge/url`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2405,7 +2405,7 @@ function toggleMobileMenu() {
       try {
         const reader = new FileReader();
         reader.onload = async (e) => {
-          const botId = localStorage.getItem('selectedBotId') || 'default';
+          const botId = localStorage.getItem('selectedAiBotId') || 'default';
           const response = await fetch(`${API_BASE}/api/knowledge/pdf`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2462,7 +2462,7 @@ function toggleMobileMenu() {
       statusEl.innerHTML = '<div class="spinner"></div> Training AI from your text...';
 
       try {
-        const botId = localStorage.getItem('selectedBotId') || 'default';
+        const botId = localStorage.getItem('selectedAiBotId') || 'default';
         const response = await fetch(`${API_BASE}/api/knowledge/text`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2501,7 +2501,7 @@ function toggleMobileMenu() {
       try {
         const reader = new FileReader();
         reader.onload = async (e) => {
-          const botId = localStorage.getItem('selectedBotId') || 'default';
+          const botId = localStorage.getItem('selectedAiBotId') || 'default';
           const response = await fetch(`${API_BASE}/api/knowledge/document`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2606,7 +2606,7 @@ function toggleMobileMenu() {
           closeCreateBotModal();
 
           // Persist & update runtime state
-          localStorage.setItem('selectedBotId', data.bot_id);
+          localStorage.setItem('selectedAiBotId', data.bot_id);
           currentBotId      = data.bot_id;
           currentBotApiKey  = data.api_key || '';
           currentBotName    = name;
@@ -2665,7 +2665,7 @@ function toggleMobileMenu() {
         // Filter AI bots
         const aiBots = bots.filter(b => !b.type || b.type === 'ai');
         
-        currentBotId = localStorage.getItem('selectedBotId') || 'default';
+        currentBotId = localStorage.getItem('selectedAiBotId') || 'default';
         let currentBotName = 'Select Chatbot';
         
         // Find current bot
@@ -2674,11 +2674,25 @@ function toggleMobileMenu() {
           currentBotApiKey = activeBot.api_key;
           currentBotName = activeBot.name;
         } else if (currentBotId === 'default') {
-          currentBotName = 'Select Chatbot';
+          if (aiBots.length > 0) {
+            currentBotId = aiBots[0].bot_id;
+            localStorage.setItem('selectedAiBotId', currentBotId);
+            currentBotApiKey = aiBots[0].api_key;
+            currentBotName = aiBots[0].name;
+          } else {
+            currentBotName = 'Select Chatbot';
+          }
         } else {
-          localStorage.setItem('selectedBotId', 'default');
-          currentBotId = 'default';
-          currentBotName = 'Select Chatbot';
+          if (aiBots.length > 0) {
+            currentBotId = aiBots[0].bot_id;
+            localStorage.setItem('selectedAiBotId', currentBotId);
+            currentBotApiKey = aiBots[0].api_key;
+            currentBotName = aiBots[0].name;
+          } else {
+            localStorage.setItem('selectedAiBotId', 'default');
+            currentBotId = 'default';
+            currentBotName = 'Select Chatbot';
+          }
         }
         
         const selectedDomainEl = document.getElementById('selectedDomain');
@@ -2723,7 +2737,7 @@ function toggleMobileMenu() {
             item.addEventListener('click', function(e) {
               e.stopPropagation();
               const botId = this.getAttribute('data-bot-id');
-              localStorage.setItem('selectedBotId', botId);
+              localStorage.setItem('selectedAiBotId', botId);
               window.location.reload();
             });
           });
@@ -2756,7 +2770,7 @@ function toggleMobileMenu() {
 
     // Embed Script Modal controls
     function showEmbedScriptModal() {
-      const botId = localStorage.getItem('selectedBotId') || 'default';
+      const botId = localStorage.getItem('selectedAiBotId') || 'default';
       const apiKey = botId === 'default' ? defaultApiKey : currentBotApiKey;
       const serverUrl = window.location.origin;
       
@@ -2819,7 +2833,7 @@ function toggleMobileMenu() {
       });
 
       // Show/hide training panels depending on bot selection
-      const currentBotId = localStorage.getItem('selectedBotId') || 'default';
+      const currentBotId = localStorage.getItem('selectedAiBotId') || 'default';
       const trainingSection = document.getElementById('aiTrainingSection');
       const placeholder = document.getElementById('createBotPlaceholder');
 

@@ -1235,6 +1235,7 @@
   let pendingFile = null;
 
   async function sendMessage(text) {
+    if (CONFIG.emailCapture && !emailVerified) return;
     if (!text.trim() && !pendingFile) return;
 
     const fileOpts = {};

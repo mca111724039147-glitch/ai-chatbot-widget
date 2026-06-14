@@ -19,6 +19,10 @@ const app  = express();
 const PORT = process.env.PORT || 4000;
 
 // ---- Middleware --------------------------------------------
+app.use((req, res, next) => {
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
+  next();
+});
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
@@ -352,11 +356,76 @@ try {
     console.log('Seeding completed successfully.');
   }
 
+  // Plans table for pricing plans sync
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      price INTEGER NOT NULL,
+      billing_cycle TEXT NOT NULL
+    )
+  `);
+
+  const plansCount = db.prepare('SELECT COUNT(*) as count FROM plans').get().count;
+  if (plansCount === 0) {
+    console.log('Seeding default plans packages...');
+    const insertPlan = db.prepare('INSERT INTO plans (name, price, billing_cycle) VALUES (?, ?, ?)');
+    insertPlan.run('Basic', 999, '1 Month');
+    insertPlan.run('Standard', 2000, '1 Month');
+    insertPlan.run('Premium', 3000, '1 Month');
+  }
+
   console.log('SQLite database connected');
 } catch (err) {
   console.warn('SQLite database connection failed:', err);
   console.warn('SQLite not available — chat history will use in-memory storage');
   db = null;
+}
+
+const fallbackPlans = [
+  { id: 1, name: 'Basic', price: 999 },
+  { id: 2, name: 'Standard', price: 2000 },
+  { id: 3, name: 'Premium', price: 3000 }
+];
+
+function resolvePlanById(planId) {
+  if (db) {
+    try {
+      const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
+      if (plan) return plan;
+    } catch (err) {
+      console.warn('Error fetching plan by ID:', err);
+    }
+  }
+  return fallbackPlans.find(p => p.id == planId) || { id: 1, name: 'Basic', price: 999 };
+}
+
+function resolvePlanByName(planName) {
+  const searchName = (planName || '').toLowerCase().trim();
+  if (db) {
+    try {
+      const plan = db.prepare('SELECT * FROM plans WHERE LOWER(name) = ?').get(searchName);
+      if (plan) return plan;
+      
+      const cleanName = searchName.split(/[-—(]/)[0].trim();
+      if (cleanName) {
+        const partialPlan = db.prepare('SELECT * FROM plans WHERE LOWER(name) = ? OR LOWER(name) LIKE ?').get(cleanName, cleanName + '%');
+        if (partialPlan) return partialPlan;
+      }
+    } catch (err) {
+      console.warn('Error fetching plan by Name:', err);
+    }
+  }
+  const found = fallbackPlans.find(p => p.name.toLowerCase() === searchName);
+  if (found) return found;
+  const cleanSearch = searchName.split(/[-—(]/)[0].trim();
+  const partialFound = fallbackPlans.find(p => p.name.toLowerCase() === cleanSearch);
+  if (partialFound) return partialFound;
+  
+  if (searchName === 'placement') {
+    return { id: 4, name: 'Placement', price: 9999 };
+  }
+  return { id: 1, name: 'Basic', price: 999 };
 }
 
 // In-memory fallback
@@ -375,6 +444,11 @@ function saveMessage(sessionId, role, content, file, meta = {}) {
     if (!memoryStore[sessionId]) memoryStore[sessionId] = [];
     memoryStore[sessionId].push({ role, content, file, timestamp: new Date().toISOString(), ...meta });
   }
+}
+
+function saveAssistantMessage(sessionId, content, source = '', responseMs = 0) {
+  if (!content) return;
+  saveMessage(sessionId, 'assistant', content, null, { source, responseMs });
 }
 
 function getHistory(sessionId, limit = 20) {
@@ -397,12 +471,14 @@ function getAllSessions() {
       ORDER BY s.updated_at DESC
     `).all();
   }
-  return Object.keys(memoryStore).map(id => ({
-    session_id: id,
-    message_count: memoryStore[id].length,
-    created_at: memoryStore[id][0]?.timestamp,
-    updated_at: memoryStore[id][memoryStore[id].length - 1]?.timestamp
-  }));
+  return Object.keys(memoryStore)
+    .filter(id => Array.isArray(memoryStore[id]) && memoryStore[id].length > 0)
+    .map(id => ({
+      session_id: id,
+      message_count: memoryStore[id].length,
+      created_at: memoryStore[id][0]?.timestamp,
+      updated_at: memoryStore[id][memoryStore[id].length - 1]?.timestamp
+    }));
 }
 
 // ---- OpenAI Client -----------------------------------------
@@ -448,9 +524,21 @@ app.post('/api/payment/create-order', async (req, res) => {
   if (!razorpayInstance) return res.status(500).json({ error: 'Razorpay not configured' });
   
   const { plan_id } = req.body;
-  let amount = 99900; // default 999 INR in paise
-  if (plan_id == 2) amount = 199900;
-  if (plan_id == 3) amount = 299900;
+  let amount = 99900; // default 999 INR in paise (fallback)
+  
+  if (db && plan_id) {
+    try {
+      const plan = db.prepare('SELECT price FROM plans WHERE id = ?').get(plan_id);
+      if (plan) {
+        amount = plan.price * 100; // convert INR to paise
+      }
+    } catch (err) {
+      console.warn('Failed to retrieve plan price from database, using fallback:', err);
+    }
+  } else {
+    if (plan_id == 2) amount = 199900;
+    if (plan_id == 3) amount = 299900;
+  }
   
   try {
     const order = await razorpayInstance.orders.create({
@@ -462,6 +550,75 @@ app.post('/api/payment/create-order', async (req, res) => {
   } catch (err) {
     console.error('Razorpay Error:', err);
     res.status(500).json({ error: err.error?.description || err.message || 'Unknown Razorpay error' });
+  }
+});
+
+// ---- Plans Sync Endpoints ----------------------------------
+app.get('/api/plans', (req, res) => {
+  try {
+    if (db) {
+      const plans = db.prepare('SELECT * FROM plans').all();
+      const mappedPlans = plans.map(p => ({
+        id: p.id,
+        name: p.name,
+        price: p.price,
+        billingCycle: p.billing_cycle
+      }));
+      res.json(mappedPlans);
+    } else {
+      // Memory fallback
+      res.json([
+        { id: 1, name: 'Basic', price: 999, billingCycle: '1 Month' },
+        { id: 2, name: 'Standard', price: 2000, billingCycle: '1 Month' },
+        { id: 3, name: 'Premium', price: 3000, billingCycle: '1 Month' }
+      ]);
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch plans', details: err.message });
+  }
+});
+
+app.post('/api/plans', (req, res) => {
+  const { id, name, price, billingCycle } = req.body;
+  if (!name || price === undefined || !billingCycle) {
+    return res.status(400).json({ error: 'name, price, and billingCycle are required' });
+  }
+  try {
+    if (db) {
+      if (id) {
+        db.prepare('UPDATE plans SET name = ?, price = ?, billing_cycle = ? WHERE id = ?')
+          .run(name, price, billingCycle, id);
+        res.json({ success: true, message: 'Plan updated successfully' });
+      } else {
+        const info = db.prepare('INSERT INTO plans (name, price, billing_cycle) VALUES (?, ?, ?)')
+          .run(name, price, billingCycle);
+        res.json({ success: true, id: info.lastInsertRowid, message: 'Plan created successfully' });
+      }
+    } else {
+      res.json({ success: true, message: 'SQLite database not active (in-memory mode)' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save plan', details: err.message });
+  }
+});
+
+app.delete('/api/plans/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid plan ID' });
+  }
+  if (id <= 3) {
+    return res.status(400).json({ error: 'Cannot delete default system plan' });
+  }
+  try {
+    if (db) {
+      db.prepare('DELETE FROM plans WHERE id = ?').run(id);
+      res.json({ success: true, message: 'Plan deleted successfully' });
+    } else {
+      res.json({ success: true, message: 'SQLite database not active (in-memory mode)' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete plan', details: err.message });
   }
 });
 
@@ -1442,16 +1599,20 @@ app.post('/api/chat', restrictDomain, checkApiKey, rateLimit, async (req, res) =
   // Check if AI is enabled in config
   if (config.enableAI === false) {
     console.log('⚠️ AI is disabled in config');
+    const reply = "I couldn't find an answer. Please contact support.";
+    saveAssistantMessage(sessionId, reply, 'disabled', Date.now() - startTime);
     return res.json({ 
-      reply: "I couldn't find an answer. Please contact support.", 
+      reply,
       source: 'disabled' 
     });
   }
   
   if (!geminiModel) {
     console.error('❌ Gemini AI not initialized! Check GEMINI_API_KEY in .env');
+    const reply = "I'm currently unable to process your request. Please try again later.";
+    saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
     return res.json({ 
-      reply: "I'm currently unable to process your request. Please try again later.", 
+      reply,
       source: 'error' 
     });
   }
@@ -1462,22 +1623,23 @@ app.post('/api/chat', restrictDomain, checkApiKey, rateLimit, async (req, res) =
     
     if (geminiReply && geminiReply.trim()) {
       console.log('✅ Gemini AI response received');
-      saveMessage(sessionId, 'assistant', geminiReply, null, {
-        source: 'gemini',
-        responseMs: Date.now() - startTime
-      });
+      saveAssistantMessage(sessionId, geminiReply, 'gemini', Date.now() - startTime);
       return res.json({ reply: geminiReply, source: 'gemini' });
     } else {
       console.error('❌ Gemini returned empty response');
+      const reply = "I'm currently unable to process your request. Please try again later.";
+      saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
       return res.json({ 
-        reply: "I'm currently unable to process your request. Please try again later.", 
+        reply,
         source: 'error' 
       });
     }
   } catch (err) {
     console.error('❌ Gemini Error:', err.message);
+    const reply = "I'm currently unable to process your request. Please try again later.";
+    saveAssistantMessage(sessionId, reply, 'error', Date.now() - startTime);
     return res.json({ 
-      reply: "I'm currently unable to process your request. Please try again later.", 
+      reply,
       source: 'error' 
     });
   }
@@ -1833,10 +1995,17 @@ app.post('/api/knowledge/text', (req, res) => {
 
 // Helper to parse plan limits
 function getPlanLimit(planName) {
-  const name = (planName || '').toLowerCase();
+  const name = (planName || '').toLowerCase().trim();
   if (name.includes('unlimited')) return Infinity;
-  if (name.includes('5 bot') || name.includes('premium')) return 5;
-  if (name.includes('3 bot') || name.includes('standard')) return 3;
+  
+  // Extract number of bots dynamically from plan name if present, e.g. "Enterprise (10 bots)" or "5 bots plan"
+  const match = name.match(/(\d+)\s*bot/);
+  if (match) {
+    return parseInt(match[1], 10);
+  }
+  
+  if (name.includes('premium')) return 5;
+  if (name.includes('standard')) return 3;
   if (name.includes('single') || name.includes('basic') || name.includes('trial')) return 1;
   return 1; // Default fallback
 }
@@ -2430,6 +2599,17 @@ app.post('/api/payment/verify', async (req, res) => {
         )
       `);
 
+      // Fetch plan name dynamically from database
+      let planName = 'Basic';
+      try {
+        const planRecord = db.prepare('SELECT name FROM plans WHERE id = ?').get(plan_id);
+        if (planRecord) {
+          planName = planRecord.name;
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve plan name from database, defaulting to Basic:', err);
+      }
+
       // Generate unique client ID or retrieve existing one
       const existing = db.prepare('SELECT client_id FROM clients WHERE email = ?').get(email);
       let clientId;
@@ -2441,20 +2621,19 @@ app.post('/api/payment/verify', async (req, res) => {
       if (existing) {
         clientId = existing.client_id;
         db.prepare(
-          'UPDATE clients SET company_name = ?, phone = ?, password = ?, plan_id = ?, status = ? WHERE email = ?'
-        ).run(company_name, phone, hashedPassword, plan_id, 'active', email);
-        console.log(`✅ Existing client updated after payment: ${company_name} (${email}) - Plan ${plan_id}`);
+          'UPDATE clients SET company_name = ?, phone = ?, password = ?, plan_id = ?, plan_name = ?, status = ? WHERE email = ?'
+        ).run(company_name, phone, hashedPassword, plan_id, planName, 'active', email);
+        console.log(`✅ Existing client updated after payment: ${company_name} (${email}) - Plan ${plan_id} (${planName})`);
       } else {
         clientId = 'cli_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         db.prepare(
-          'INSERT INTO clients (client_id, company_name, email, phone, password, plan_id) VALUES (?, ?, ?, ?, ?, ?)'
-        ).run(clientId, company_name, email, phone, hashedPassword, plan_id);
-        console.log(`✅ New client registered: ${company_name} (${email}) - Plan ${plan_id}`);
+          'INSERT INTO clients (client_id, company_name, email, phone, password, plan_id, plan_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(clientId, company_name, email, phone, hashedPassword, plan_id, planName);
+        console.log(`✅ New client registered: ${company_name} (${email}) - Plan ${plan_id} (${planName})`);
       }
 
       // Send welcome email with credentials
-      const plan_name = plan_id === 1 ? 'Basic' : plan_id === 2 ? 'Standard' : 'Premium';
-      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name, status: 'active' }, password, req);
+      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
 
       res.json({ 
         success: true, 
@@ -2464,6 +2643,9 @@ app.post('/api/payment/verify', async (req, res) => {
       });
     } else {
       // Memory fallback
+      const plan = resolvePlanById(plan_id);
+      const planName = plan.name;
+      
       if (!global.memoryClients) global.memoryClients = [];
       const clientId = 'cli_' + Date.now();
       global.memoryClients.push({
@@ -2472,11 +2654,11 @@ app.post('/api/payment/verify', async (req, res) => {
         email,
         password,
         plan_id,
+        plan_name: planName,
         created_at: new Date().toISOString()
       });
       
-      const plan_name = plan_id === 1 ? 'Basic' : plan_id === 2 ? 'Standard' : 'Premium';
-      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name, status: 'active' }, password, req);
+      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
       
       res.json({ 
         success: true, 
@@ -2487,6 +2669,102 @@ app.post('/api/payment/verify', async (req, res) => {
   } catch (error) {
     console.error('Purchase error:', error.message);
     res.status(500).json({ error: 'Registration failed. Please try again.' });
+  }
+});
+
+// POST /api/payment/simulate-success — Simulate successful payment verification for testing without Razorpay
+app.post('/api/payment/simulate-success', async (req, res) => {
+  const { company_name, email, phone, password, plan_id } = req.body;
+
+  // Validation
+  if (!company_name || !email || !password || !plan_id || !phone) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
+
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  // Validate password strength (minimum 8 characters)
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+
+  try {
+    if (db) {
+      // Fetch plan name dynamically from database
+      let planName = 'Basic';
+      try {
+        const planRecord = db.prepare('SELECT name FROM plans WHERE id = ?').get(plan_id);
+        if (planRecord) {
+          planName = planRecord.name;
+        }
+      } catch (err) {
+        console.warn('Failed to retrieve plan name from database, defaulting to Basic:', err);
+      }
+
+      // Generate unique client ID or retrieve existing one
+      const existing = db.prepare('SELECT client_id FROM clients WHERE email = ?').get(email);
+      let clientId;
+
+      // Hash password (in production, use bcrypt)
+      const crypto = require('crypto');
+      const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
+
+      if (existing) {
+        clientId = existing.client_id;
+        db.prepare(
+          'UPDATE clients SET company_name = ?, phone = ?, password = ?, plan_id = ?, plan_name = ?, status = ? WHERE email = ?'
+        ).run(company_name, phone, hashedPassword, plan_id, planName, 'active', email);
+        console.log(`✅ [SIMULATED] Existing client updated: ${company_name} (${email}) - Plan ${plan_id} (${planName})`);
+      } else {
+        clientId = 'cli_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        db.prepare(
+          'INSERT INTO clients (client_id, company_name, email, phone, password, plan_id, plan_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(clientId, company_name, email, phone, hashedPassword, plan_id, planName);
+        console.log(`✅ [SIMULATED] New client registered: ${company_name} (${email}) - Plan ${plan_id} (${planName})`);
+      }
+
+      // Send welcome email with credentials
+      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+
+      res.json({ 
+        success: true, 
+        clientId: clientId,
+        message: '[SIMULATION SUCCESS] Registration successful! Check your email for login credentials.',
+        emailSent: emailResult ? emailResult.success : false
+      });
+    } else {
+      // Memory fallback
+      const plan = resolvePlanById(plan_id);
+      const planName = plan.name;
+      
+      if (!global.memoryClients) global.memoryClients = [];
+      const clientId = 'cli_' + Date.now();
+      global.memoryClients.push({
+        clientId,
+        company_name,
+        email,
+        password,
+        plan_id,
+        plan_name: planName,
+        created_at: new Date().toISOString()
+      });
+      
+      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      
+      res.json({ 
+        success: true, 
+        clientId,
+        message: '[SIMULATION SUCCESS] Memory registration successful!',
+        emailSent: emailResult ? emailResult.success : false 
+      });
+    }
+  } catch (error) {
+    console.error('Simulated purchase error:', error.message);
+    res.status(500).json({ error: 'Simulated registration failed. Please try again.' });
   }
 });
 
@@ -2563,12 +2841,23 @@ app.get('/api/superadmin/stats', (req, res) => {
       const activeClients = db.prepare('SELECT COUNT(*) as count FROM clients WHERE is_deleted = 0').get().count;
       const clientsList = db.prepare('SELECT plan_name FROM clients WHERE is_deleted = 0').all();
       
+      const plans = db.prepare('SELECT name, price FROM plans').all();
+      const planPriceMap = {};
+      plans.forEach(p => {
+        planPriceMap[p.name.toLowerCase().trim()] = p.price;
+      });
+
       let totalRevenue = 0;
       clientsList.forEach(c => {
-        const name = (c.plan_name || '').toLowerCase();
-        if (name.includes('premium')) totalRevenue += 3000;
-        else if (name.includes('standard')) totalRevenue += 2000;
-        else if (name.includes('basic')) totalRevenue += 1000;
+        const name = (c.plan_name || '').toLowerCase().trim();
+        if (planPriceMap[name] !== undefined) {
+          totalRevenue += planPriceMap[name];
+        } else {
+          if (name.includes('premium')) totalRevenue += 3000;
+          else if (name.includes('standard')) totalRevenue += 2000;
+          else if (name.includes('basic')) totalRevenue += 1000;
+          else totalRevenue += 1000;
+        }
       });
 
       // Special case: if it equals 11000 (like in the seed data), let's map standard mock revenue to 9999 as shown in screenshot or return calculated
@@ -2581,12 +2870,21 @@ app.get('/api/superadmin/stats', (req, res) => {
   } else {
     // Memory fallback
     const list = (global.memoryClients || []).filter(c => !c.is_deleted);
+    const planPriceMap = {};
+    fallbackPlans.forEach(p => {
+      planPriceMap[p.name.toLowerCase().trim()] = p.price;
+    });
+
     let totalRevenue = 0;
     list.forEach(c => {
-      const name = (c.plan_name || '').toLowerCase();
-      if (name.includes('premium')) totalRevenue += 3000;
-      else if (name.includes('standard')) totalRevenue += 2000;
-      else totalRevenue += 1000;
+      const name = (c.plan_name || '').toLowerCase().trim();
+      if (planPriceMap[name] !== undefined) {
+        totalRevenue += planPriceMap[name];
+      } else {
+        if (name.includes('premium')) totalRevenue += 3000;
+        else if (name.includes('standard')) totalRevenue += 2000;
+        else totalRevenue += 1000;
+      }
     });
     res.json({ totalClients: list.length, activeClients: list.length, totalRevenue });
   }
@@ -2624,7 +2922,7 @@ app.get('/api/superadmin/clients/deleted', (req, res) => {
 
 // POST /api/superadmin/clients — Create new client
 app.post('/api/superadmin/clients', async (req, res) => {
-  const { company_name, email, password, plan_name, days_left, status } = req.body;
+  const { company_name, email, password, plan_name, plan_id, days_left, status } = req.body;
   if (!company_name || !email || !password) {
     return res.status(400).json({ error: 'Company name, email, and password are required' });
   }
@@ -2633,9 +2931,15 @@ app.post('/api/superadmin/clients', async (req, res) => {
   const crypto = require('crypto');
   const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
   
-  const lowerPlan = (plan_name || '').toLowerCase();
-  const planId = lowerPlan === 'premium' ? 3 : lowerPlan === 'standard' ? 2 : lowerPlan === 'placement' ? 4 : 1;
-  const defaultDays = lowerPlan === 'placement' ? 90 : 30;
+  let planInfo;
+  if (plan_id !== undefined && plan_id !== '') {
+    planInfo = resolvePlanById(plan_id);
+  } else {
+    planInfo = resolvePlanByName(plan_name || 'Basic');
+  }
+  const planId = planInfo.id;
+  const planName = planInfo.name;
+  const defaultDays = planInfo.name.toLowerCase() === 'placement' ? 90 : 30;
   const finalDaysLeft = days_left !== undefined ? days_left : defaultDays;
   const finalStatus = status || 'COD_PENDING';
 
@@ -2650,10 +2954,10 @@ app.post('/api/superadmin/clients', async (req, res) => {
       db.prepare(`
         INSERT INTO clients (client_id, company_name, email, password, plan_id, plan_name, plain_password, days_left, status, is_deleted)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-      `).run(clientId, company_name, email, hashedPassword, planId, plan_name || 'Basic', password, finalDaysLeft, finalStatus);
+      `).run(clientId, company_name, email, hashedPassword, planId, planName, password, finalDaysLeft, finalStatus);
       
       // Send welcome email and await result
-      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: plan_name || 'Basic', status: finalStatus }, password, req);
+      const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: finalStatus }, password, req);
       
       res.json({ 
         success: true, 
@@ -2675,7 +2979,7 @@ app.post('/api/superadmin/clients', async (req, res) => {
       email,
       password: hashedPassword,
       plan_id: planId,
-      plan_name: plan_name || 'Basic',
+      plan_name: planName,
       plain_password: password,
       days_left: finalDaysLeft,
       status: finalStatus,
@@ -2684,7 +2988,7 @@ app.post('/api/superadmin/clients', async (req, res) => {
     });
     
     // Send welcome email and await result
-    const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: plan_name || 'Basic', status: finalStatus }, password, req);
+    const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: finalStatus }, password, req);
     
     res.json({ 
       success: true, 
@@ -2697,7 +3001,7 @@ app.post('/api/superadmin/clients', async (req, res) => {
 
 // PUT /api/superadmin/clients/:clientId — Update client info
 app.put('/api/superadmin/clients/:clientId', (req, res) => {
-  const { company_name, email, password, plan_name, days_left, status } = req.body;
+  const { company_name, email, password, plan_name, plan_id, days_left, status } = req.body;
   
   if (db) {
     try {
@@ -2712,7 +3016,16 @@ app.put('/api/superadmin/clients/:clientId', (req, res) => {
         plainPassword = password;
       }
       
-      const planId = (plan_name || '').toLowerCase() === 'premium' ? 3 : (plan_name || '').toLowerCase() === 'standard' ? 2 : 1;
+      let planInfo;
+      if (plan_id !== undefined && plan_id !== '') {
+        planInfo = resolvePlanById(plan_id);
+      } else if (plan_name !== undefined) {
+        planInfo = resolvePlanByName(plan_name);
+      } else {
+        planInfo = resolvePlanById(client.plan_id);
+      }
+      const planId = planInfo.id;
+      const planName = planInfo.name;
       
       db.prepare(`
         UPDATE clients
@@ -2723,7 +3036,7 @@ app.put('/api/superadmin/clients/:clientId', (req, res) => {
         email || client.email,
         hashedPassword,
         planId,
-        plan_name || client.plan_name,
+        planName,
         plainPassword,
         days_left !== undefined ? days_left : client.days_left,
         status || client.status,
@@ -2745,9 +3058,14 @@ app.put('/api/superadmin/clients/:clientId', (req, res) => {
       client.password = crypto.createHash('sha256').update(password).digest('hex');
       client.plain_password = password;
     }
-    if (plan_name) {
-      client.plan_name = plan_name;
-      client.plan_id = plan_name.toLowerCase() === 'premium' ? 3 : plan_name.toLowerCase() === 'standard' ? 2 : 1;
+    if (plan_id !== undefined && plan_id !== '') {
+      const planInfo = resolvePlanById(plan_id);
+      client.plan_id = planInfo.id;
+      client.plan_name = planInfo.name;
+    } else if (plan_name !== undefined) {
+      const planInfo = resolvePlanByName(plan_name);
+      client.plan_id = planInfo.id;
+      client.plan_name = planInfo.name;
     }
     if (days_left !== undefined) client.days_left = days_left;
     if (status) client.status = status;
