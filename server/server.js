@@ -85,15 +85,16 @@ function saveConfig(config) {
 function getEmailConfig() {
   const config = loadConfig();
   const emailCfg = config.emailNotifications || {};
+  const smtpUser = process.env.SMTP_USER || process.env.SMTP_USERNAME || emailCfg.smtpUser || 'resend';
   return {
     enabled: process.env.EMAIL_ENABLED !== undefined 
       ? (process.env.EMAIL_ENABLED === 'true') 
       : (emailCfg.enabled !== false), // default to true if not explicitly false
-    smtpHost: process.env.SMTP_HOST || emailCfg.smtpHost || 'smtp.resend.com',
+    smtpHost: process.env.SMTP_HOST || process.env.SMTP_SERVER || emailCfg.smtpHost || 'smtp.resend.com',
     smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : (emailCfg.smtpPort || 587),
-    smtpUser: process.env.SMTP_USER || emailCfg.smtpUser || 'resend',
-    smtpPass: process.env.SMTP_PASS || emailCfg.smtpPass || '',
-    senderEmail: process.env.SENDER_EMAIL || emailCfg.senderEmail || (emailCfg.smtpUser && emailCfg.smtpUser.includes('@') ? emailCfg.smtpUser : 'onboarding@resend.dev'),
+    smtpUser: smtpUser,
+    smtpPass: process.env.SMTP_PASS || process.env.SMTP_PASSWORD || emailCfg.smtpPass || '',
+    senderEmail: process.env.SENDER_EMAIL || process.env.SMTP_FROM || process.env.MAIL_FROM || emailCfg.senderEmail || (smtpUser && smtpUser.includes('@') ? smtpUser : 'onboarding@resend.dev'),
     adminEmail: process.env.ADMIN_EMAIL || emailCfg.adminEmail || ''
   };
 }
@@ -854,16 +855,27 @@ async function sendLeadEmail(lead) {
 async function sendWelcomeEmail(client, plainPassword, req) {
   const companyName = client.company_name;
   const email = client.email;
-  console.log(`[EMAIL] 🚀 Triggered sendWelcomeEmail() for client: ${companyName} (${email})`);
+  console.log(`[EMAIL] 🚀 Welcome email trigger initiated for client: "${companyName}" <${email}>`);
 
   try {
     const config = loadConfig();
     const emailCfg = getEmailConfig();
-    console.log(`[EMAIL] Loaded config: enabled=${emailCfg.enabled}, host=${emailCfg.smtpHost}, port=${emailCfg.smtpPort}, user=${emailCfg.smtpUser}, sender=${emailCfg.senderEmail}, admin=${emailCfg.adminEmail}`);
+    
+    // Mask password in logs
+    const maskedPass = emailCfg.smtpPass 
+      ? (emailCfg.smtpPass.length > 6 ? `${emailCfg.smtpPass.substring(0, 3)}...${emailCfg.smtpPass.substring(emailCfg.smtpPass.length - 3)}` : '***') 
+      : 'not set';
+      
+    console.log(`[EMAIL] SMTP Config: host=${emailCfg.smtpHost}, port=${emailCfg.smtpPort}, user=${emailCfg.smtpUser}, pass=${maskedPass}, sender=${emailCfg.senderEmail}, enabled=${emailCfg.enabled}`);
 
-    if (!emailCfg.enabled || !emailCfg.smtpUser) {
-      console.warn("⚠️ SMTP credentials not fully configured or email notifications disabled, skipping welcome email.");
-      return { success: false, error: 'Email notifications disabled or SMTP credentials not configured' };
+    if (!emailCfg.enabled) {
+      console.warn("[EMAIL] ⚠️ Welcome email skipped: Email notifications are disabled.");
+      return { success: false, error: 'Email notifications disabled' };
+    }
+    
+    if (!emailCfg.smtpUser || !emailCfg.smtpPass) {
+      console.warn("[EMAIL] ⚠️ Welcome email skipped: SMTP user or password is not configured.");
+      return { success: false, error: 'SMTP credentials not configured' };
     }
 
     console.log(`[EMAIL] Initializing SMTP transporter...`);
@@ -874,6 +886,16 @@ async function sendWelcomeEmail(client, plainPassword, req) {
       auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
       tls: { rejectUnauthorized: false }
     });
+
+    // Verify SMTP connection before sending
+    try {
+      console.log(`[EMAIL] Verifying SMTP connection to host ${emailCfg.smtpHost}...`);
+      await transporter.verify();
+      console.log(`[EMAIL] ✅ SMTP connection verified successfully.`);
+    } catch (verifyError) {
+      console.error(`[EMAIL] ❌ SMTP connection verification failed:`, verifyError);
+      return { success: false, error: `SMTP Connection Verification Failed: ${verifyError.message}` };
+    }
 
     // Resolve login URL: Use PUBLIC_URL if specified, otherwise fall back to host headers
     let loginUrl;
@@ -2633,7 +2655,9 @@ app.post('/api/payment/verify', async (req, res) => {
       }
 
       // Send welcome email with credentials
+      console.log(`[PAYMENT SUCCESS] Razorpay payment verified. Triggering welcome email for new client: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
 
       res.json({ 
         success: true, 
@@ -2658,7 +2682,9 @@ app.post('/api/payment/verify', async (req, res) => {
         created_at: new Date().toISOString()
       });
       
+      console.log(`[PAYMENT SUCCESS] [MEMORY MODE] Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [MEMORY MODE] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
       
       res.json({ 
         success: true, 
@@ -2728,7 +2754,9 @@ app.post('/api/payment/simulate-success', async (req, res) => {
       }
 
       // Send welcome email with credentials
+      console.log(`[SIMULATED PAYMENT SUCCESS] Payment simulated successfully. Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [SIMULATION] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
 
       res.json({ 
         success: true, 
@@ -2753,7 +2781,9 @@ app.post('/api/payment/simulate-success', async (req, res) => {
         created_at: new Date().toISOString()
       });
       
+      console.log(`[SIMULATED PAYMENT SUCCESS] [MEMORY MODE] Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [SIMULATION] [MEMORY MODE] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
       
       res.json({ 
         success: true, 

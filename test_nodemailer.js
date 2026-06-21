@@ -16,15 +16,16 @@ function getEmailConfig() {
     console.warn("⚠️ Could not load server/config.json, using environment overrides or defaults.");
   }
   
+  const smtpUser = process.env.SMTP_USER || process.env.SMTP_USERNAME || emailCfg.smtpUser || 'resend';
   return {
     enabled: process.env.EMAIL_ENABLED !== undefined 
       ? (process.env.EMAIL_ENABLED === 'true') 
       : (emailCfg.enabled !== false),
-    smtpHost: process.env.SMTP_HOST || emailCfg.smtpHost || 'smtp.resend.com',
+    smtpHost: process.env.SMTP_HOST || process.env.SMTP_SERVER || emailCfg.smtpHost || 'smtp.resend.com',
     smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : (emailCfg.smtpPort || 587),
-    smtpUser: process.env.SMTP_USER || emailCfg.smtpUser || 'resend',
-    smtpPass: process.env.SMTP_PASS || emailCfg.smtpPass || '',
-    senderEmail: process.env.SENDER_EMAIL || emailCfg.senderEmail || (emailCfg.smtpUser && emailCfg.smtpUser.includes('@') ? emailCfg.smtpUser : 'onboarding@resend.dev'),
+    smtpUser: smtpUser,
+    smtpPass: process.env.SMTP_PASS || process.env.SMTP_PASSWORD || emailCfg.smtpPass || '',
+    senderEmail: process.env.SENDER_EMAIL || process.env.SMTP_FROM || process.env.MAIL_FROM || emailCfg.senderEmail || (smtpUser && smtpUser.includes('@') ? smtpUser : 'onboarding@resend.dev'),
     adminEmail: process.env.ADMIN_EMAIL || emailCfg.adminEmail || ''
   };
 }
