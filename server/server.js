@@ -897,6 +897,25 @@ async function runSmtpDiagnostics(host) {
   }
 }
 
+// Promise timeout wrapper
+function promiseTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Operation timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (res) => {
+        clearTimeout(timer);
+        resolve(res);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 // Welcome email notification to client
 async function sendWelcomeEmail(client, plainPassword, req) {
   const companyName = client.company_name;
@@ -920,36 +939,11 @@ async function sendWelcomeEmail(client, plainPassword, req) {
     }
     
     if (!emailCfg.smtpUser || !emailCfg.smtpPass) {
-      console.warn("[EMAIL] ⚠️ Welcome email skipped: SMTP user or password is not configured.");
+      console.warn("[EMAIL] ⚠️ Welcome email skipped: SMTP credentials are not configured.");
       return { success: false, error: 'SMTP credentials not configured' };
     }
 
-    console.log(`[EMAIL] Initializing SMTP transporter...`);
-    const transporter = nodemailer.createTransport({
-      host: emailCfg.smtpHost,
-      port: emailCfg.smtpPort,
-      secure: emailCfg.smtpPort === 465,
-      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
-      tls: { rejectUnauthorized: false }
-    });
-
-    // Verify SMTP connection before sending
-    try {
-      console.log(`[EMAIL] Verifying SMTP connection to host ${emailCfg.smtpHost}...`);
-      await transporter.verify();
-      console.log(`[EMAIL] ✅ SMTP connection verified successfully.`);
-    } catch (verifyError) {
-      console.error(`[EMAIL] ❌ SMTP connection verification failed:`, verifyError);
-      try {
-        await runSmtpDiagnostics(emailCfg.smtpHost);
-      } catch (diagErr) {
-        console.error(`[EMAIL] Diagnostics failed to run:`, diagErr);
-      }
-      return { success: false, error: `SMTP Connection Verification Failed: ${verifyError.message}` };
-    }
-
-
-    // Resolve login URL: Use PUBLIC_URL if specified, otherwise fall back to host headers
+    // Resolve login URL
     let loginUrl;
     if (process.env.PUBLIC_URL) {
       loginUrl = `${process.env.PUBLIC_URL.replace(/\/$/, '')}/admin/login.html`;
@@ -958,13 +952,9 @@ async function sendWelcomeEmail(client, plainPassword, req) {
       const host = req ? req.get('host') : 'localhost:4000';
       loginUrl = `${protocol}://${host}/admin/login.html`;
     }
-    console.log(`[EMAIL] Generated login URL: ${loginUrl}`);
 
-    const companyName = client.company_name;
-    const email = client.email;
     const planName = client.plan_name || 'Basic';
     const status = client.status || 'COD_PENDING';
-
     const isCod = status.includes('COD');
     const paymentModeHtml = isCod 
       ? `<strong>Payment Mode:</strong> Cash on Delivery (COD)<br><span style="color:#6b7280; font-size:13px;">Our team will reach out to you shortly for the payment collection.</span>`
@@ -1138,6 +1128,64 @@ async function sendWelcomeEmail(client, plainPassword, req) {
 </body>
 </html>
 `;
+
+    // 1. Try Brevo HTTP API directly if Brevo is used to bypass outbound SMTP blocking
+    if (emailCfg.smtpHost && emailCfg.smtpHost.includes('brevo.com') && emailCfg.smtpPass) {
+      console.log(`[EMAIL] 🌐 Brevo SMTP host detected. Attempting email delivery via Brevo HTTP API (Port 443)...`);
+      try {
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': emailCfg.smtpPass,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: 'GAdigital Solution', email: emailCfg.senderEmail },
+            to: [ { email: email } ],
+            subject: '🚀 Welcome to GAdigital Solution - Your Account is Ready!',
+            htmlContent: mailHtml
+          })
+        });
+
+        const responseData = await response.json();
+        if (response.ok) {
+          console.log(`[EMAIL] ✉️ Welcome email sent successfully via Brevo HTTP API to ${email} for client ${companyName}. MessageID: ${responseData.messageId}`);
+          return { success: true };
+        } else {
+          console.error(`[EMAIL] ❌ Brevo HTTP API returned error:`, responseData);
+          console.log(`[EMAIL] Falling back to standard SMTP...`);
+        }
+      } catch (httpErr) {
+        console.error(`[EMAIL] ❌ Brevo HTTP API request failed:`, httpErr.message);
+        console.log(`[EMAIL] Falling back to standard SMTP...`);
+      }
+    }
+
+    // 2. Standard SMTP Fallback
+    console.log(`[EMAIL] Initializing SMTP transporter...`);
+    const transporter = nodemailer.createTransport({
+      host: emailCfg.smtpHost,
+      port: emailCfg.smtpPort,
+      secure: emailCfg.smtpPort === 465,
+      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+      tls: { rejectUnauthorized: false }
+    });
+
+    // Verify SMTP connection before sending with a 6-second timeout
+    try {
+      console.log(`[EMAIL] Verifying SMTP connection to host ${emailCfg.smtpHost} (with 6s timeout)...`);
+      await promiseTimeout(transporter.verify(), 6000);
+      console.log(`[EMAIL] ✅ SMTP connection verified successfully.`);
+    } catch (verifyError) {
+      console.error(`[EMAIL] ❌ SMTP connection verification failed:`, verifyError.message);
+      try {
+        await runSmtpDiagnostics(emailCfg.smtpHost);
+      } catch (diagErr) {
+        console.error(`[EMAIL] Diagnostics failed to run:`, diagErr);
+      }
+      return { success: false, error: `SMTP Connection Verification Failed: ${verifyError.message}` };
+    }
 
     console.log(`[EMAIL] Attempting to send welcome email from "${emailCfg.senderEmail}" to "${email}"...`);
     const info = await transporter.sendMail({
