@@ -85,15 +85,16 @@ function saveConfig(config) {
 function getEmailConfig() {
   const config = loadConfig();
   const emailCfg = config.emailNotifications || {};
+  const smtpUser = process.env.SMTP_USER || process.env.SMTP_USERNAME || emailCfg.smtpUser || 'resend';
   return {
     enabled: process.env.EMAIL_ENABLED !== undefined 
       ? (process.env.EMAIL_ENABLED === 'true') 
       : (emailCfg.enabled !== false), // default to true if not explicitly false
-    smtpHost: process.env.SMTP_HOST || emailCfg.smtpHost || 'smtp.resend.com',
+    smtpHost: process.env.SMTP_HOST || process.env.SMTP_SERVER || emailCfg.smtpHost || 'smtp.resend.com',
     smtpPort: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : (emailCfg.smtpPort || 587),
-    smtpUser: process.env.SMTP_USER || emailCfg.smtpUser || 'resend',
-    smtpPass: process.env.SMTP_PASS || emailCfg.smtpPass || '',
-    senderEmail: process.env.SENDER_EMAIL || emailCfg.senderEmail || (emailCfg.smtpUser && emailCfg.smtpUser.includes('@') ? emailCfg.smtpUser : 'onboarding@resend.dev'),
+    smtpUser: smtpUser,
+    smtpPass: process.env.SMTP_PASS || process.env.SMTP_PASSWORD || emailCfg.smtpPass || '',
+    senderEmail: process.env.SENDER_EMAIL || process.env.SMTP_FROM || process.env.MAIL_FROM || emailCfg.senderEmail || (smtpUser && smtpUser.includes('@') ? smtpUser : 'onboarding@resend.dev'),
     adminEmail: process.env.ADMIN_EMAIL || emailCfg.adminEmail || ''
   };
 }
@@ -850,32 +851,99 @@ async function sendLeadEmail(lead) {
   }
 }
 
+// Run detailed SMTP/network connectivity diagnostics
+async function runSmtpDiagnostics(host) {
+  console.log(`[EMAIL DIAGNOSTICS] Starting network diagnostics for SMTP host: ${host}`);
+  const dns = require('dns').promises;
+  const net = require('net');
+  
+  // 1. DNS Resolution
+  try {
+    const addresses = await dns.resolve4(host);
+    console.log(`[EMAIL DIAGNOSTICS] DNS resolution for ${host} succeeded. IP Addresses:`, addresses);
+  } catch (dnsErr) {
+    console.error(`[EMAIL DIAGNOSTICS] DNS resolution for ${host} failed:`, dnsErr.message);
+  }
+  
+  // 2. TCP Port Connection Tests
+  const testPorts = [25, 465, 587, 2525, 80, 443];
+  for (const port of testPorts) {
+    console.log(`[EMAIL DIAGNOSTICS] Testing TCP connection to ${host}:${port}...`);
+    try {
+      const result = await new Promise((resolve) => {
+        const socket = new net.Socket();
+        socket.setTimeout(4000);
+        socket.connect(port, host, () => {
+          socket.destroy();
+          resolve({ success: true });
+        });
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve({ success: false, reason: 'timeout' });
+        });
+        socket.on('error', (err) => {
+          socket.destroy();
+          resolve({ success: false, reason: err.message });
+        });
+      });
+      if (result.success) {
+        console.log(`[EMAIL DIAGNOSTICS] ✅ TCP Connection to ${host}:${port} SUCCEEDED.`);
+      } else {
+        console.warn(`[EMAIL DIAGNOSTICS] ❌ TCP Connection to ${host}:${port} FAILED (Reason: ${result.reason}).`);
+      }
+    } catch (err) {
+      console.warn(`[EMAIL DIAGNOSTICS] ❌ TCP Connection test to ${host}:${port} encountered unexpected error:`, err.message);
+    }
+  }
+}
+
+// Promise timeout wrapper
+function promiseTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Operation timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (res) => {
+        clearTimeout(timer);
+        resolve(res);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 // Welcome email notification to client
 async function sendWelcomeEmail(client, plainPassword, req) {
   const companyName = client.company_name;
   const email = client.email;
-  console.log(`[EMAIL] 🚀 Triggered sendWelcomeEmail() for client: ${companyName} (${email})`);
+  console.log(`[EMAIL] 🚀 Welcome email trigger initiated for client: "${companyName}" <${email}>`);
 
   try {
     const config = loadConfig();
     const emailCfg = getEmailConfig();
-    console.log(`[EMAIL] Loaded config: enabled=${emailCfg.enabled}, host=${emailCfg.smtpHost}, port=${emailCfg.smtpPort}, user=${emailCfg.smtpUser}, sender=${emailCfg.senderEmail}, admin=${emailCfg.adminEmail}`);
+    
+    // Mask password in logs
+    const maskedPass = emailCfg.smtpPass 
+      ? (emailCfg.smtpPass.length > 6 ? `${emailCfg.smtpPass.substring(0, 3)}...${emailCfg.smtpPass.substring(emailCfg.smtpPass.length - 3)}` : '***') 
+      : 'not set';
+      
+    console.log(`[EMAIL] SMTP Config: host=${emailCfg.smtpHost}, port=${emailCfg.smtpPort}, user=${emailCfg.smtpUser}, pass=${maskedPass}, sender=${emailCfg.senderEmail}, enabled=${emailCfg.enabled}`);
 
-    if (!emailCfg.enabled || !emailCfg.smtpUser) {
-      console.warn("⚠️ SMTP credentials not fully configured or email notifications disabled, skipping welcome email.");
-      return { success: false, error: 'Email notifications disabled or SMTP credentials not configured' };
+    if (!emailCfg.enabled) {
+      console.warn("[EMAIL] ⚠️ Welcome email skipped: Email notifications are disabled.");
+      return { success: false, error: 'Email notifications disabled' };
+    }
+    
+    if (!emailCfg.smtpUser || !emailCfg.smtpPass) {
+      console.warn("[EMAIL] ⚠️ Welcome email skipped: SMTP credentials are not configured.");
+      return { success: false, error: 'SMTP credentials not configured' };
     }
 
-    console.log(`[EMAIL] Initializing SMTP transporter...`);
-    const transporter = nodemailer.createTransport({
-      host: emailCfg.smtpHost,
-      port: emailCfg.smtpPort,
-      secure: emailCfg.smtpPort === 465,
-      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
-      tls: { rejectUnauthorized: false }
-    });
-
-    // Resolve login URL: Use PUBLIC_URL if specified, otherwise fall back to host headers
+    // Resolve login URL
     let loginUrl;
     if (process.env.PUBLIC_URL) {
       loginUrl = `${process.env.PUBLIC_URL.replace(/\/$/, '')}/admin/login.html`;
@@ -884,13 +952,9 @@ async function sendWelcomeEmail(client, plainPassword, req) {
       const host = req ? req.get('host') : 'localhost:4000';
       loginUrl = `${protocol}://${host}/admin/login.html`;
     }
-    console.log(`[EMAIL] Generated login URL: ${loginUrl}`);
 
-    const companyName = client.company_name;
-    const email = client.email;
     const planName = client.plan_name || 'Basic';
     const status = client.status || 'COD_PENDING';
-
     const isCod = status.includes('COD');
     const paymentModeHtml = isCod 
       ? `<strong>Payment Mode:</strong> Cash on Delivery (COD)<br><span style="color:#6b7280; font-size:13px;">Our team will reach out to you shortly for the payment collection.</span>`
@@ -1064,6 +1128,64 @@ async function sendWelcomeEmail(client, plainPassword, req) {
 </body>
 </html>
 `;
+
+    // 1. Try Brevo HTTP API directly if Brevo is used to bypass outbound SMTP blocking
+    if (emailCfg.smtpHost && emailCfg.smtpHost.includes('brevo.com') && emailCfg.smtpPass) {
+      console.log(`[EMAIL] 🌐 Brevo SMTP host detected. Attempting email delivery via Brevo HTTP API (Port 443)...`);
+      try {
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': emailCfg.smtpPass,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            sender: { name: 'GAdigital Solution', email: emailCfg.senderEmail },
+            to: [ { email: email } ],
+            subject: '🚀 Welcome to GAdigital Solution - Your Account is Ready!',
+            htmlContent: mailHtml
+          })
+        });
+
+        const responseData = await response.json();
+        if (response.ok) {
+          console.log(`[EMAIL] ✉️ Welcome email sent successfully via Brevo HTTP API to ${email} for client ${companyName}. MessageID: ${responseData.messageId}`);
+          return { success: true };
+        } else {
+          console.error(`[EMAIL] ❌ Brevo HTTP API returned error:`, responseData);
+          console.log(`[EMAIL] Falling back to standard SMTP...`);
+        }
+      } catch (httpErr) {
+        console.error(`[EMAIL] ❌ Brevo HTTP API request failed:`, httpErr.message);
+        console.log(`[EMAIL] Falling back to standard SMTP...`);
+      }
+    }
+
+    // 2. Standard SMTP Fallback
+    console.log(`[EMAIL] Initializing SMTP transporter...`);
+    const transporter = nodemailer.createTransport({
+      host: emailCfg.smtpHost,
+      port: emailCfg.smtpPort,
+      secure: emailCfg.smtpPort === 465,
+      auth: { user: emailCfg.smtpUser, pass: emailCfg.smtpPass },
+      tls: { rejectUnauthorized: false }
+    });
+
+    // Verify SMTP connection before sending with a 6-second timeout
+    try {
+      console.log(`[EMAIL] Verifying SMTP connection to host ${emailCfg.smtpHost} (with 6s timeout)...`);
+      await promiseTimeout(transporter.verify(), 6000);
+      console.log(`[EMAIL] ✅ SMTP connection verified successfully.`);
+    } catch (verifyError) {
+      console.error(`[EMAIL] ❌ SMTP connection verification failed:`, verifyError.message);
+      try {
+        await runSmtpDiagnostics(emailCfg.smtpHost);
+      } catch (diagErr) {
+        console.error(`[EMAIL] Diagnostics failed to run:`, diagErr);
+      }
+      return { success: false, error: `SMTP Connection Verification Failed: ${verifyError.message}` };
+    }
 
     console.log(`[EMAIL] Attempting to send welcome email from "${emailCfg.senderEmail}" to "${email}"...`);
     const info = await transporter.sendMail({
@@ -2633,7 +2755,9 @@ app.post('/api/payment/verify', async (req, res) => {
       }
 
       // Send welcome email with credentials
+      console.log(`[PAYMENT SUCCESS] Razorpay payment verified. Triggering welcome email for new client: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
 
       res.json({ 
         success: true, 
@@ -2658,7 +2782,9 @@ app.post('/api/payment/verify', async (req, res) => {
         created_at: new Date().toISOString()
       });
       
+      console.log(`[PAYMENT SUCCESS] [MEMORY MODE] Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [MEMORY MODE] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
       
       res.json({ 
         success: true, 
@@ -2728,7 +2854,9 @@ app.post('/api/payment/simulate-success', async (req, res) => {
       }
 
       // Send welcome email with credentials
+      console.log(`[SIMULATED PAYMENT SUCCESS] Payment simulated successfully. Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [SIMULATION] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
 
       res.json({ 
         success: true, 
@@ -2753,7 +2881,9 @@ app.post('/api/payment/simulate-success', async (req, res) => {
         created_at: new Date().toISOString()
       });
       
+      console.log(`[SIMULATED PAYMENT SUCCESS] [MEMORY MODE] Triggering welcome email for: ${email}`);
       const emailResult = await sendWelcomeEmail({ company_name, email, plan_name: planName, status: 'active' }, password, req);
+      console.log(`[EMAIL RESULT] [SIMULATION] [MEMORY MODE] Welcome email delivery status: success=${emailResult.success}${emailResult.error ? ', error=' + emailResult.error : ''}`);
       
       res.json({ 
         success: true, 
