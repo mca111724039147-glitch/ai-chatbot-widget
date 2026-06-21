@@ -1130,7 +1130,7 @@ async function sendWelcomeEmail(client, plainPassword, req) {
 `;
 
     // 1. Try Brevo HTTP API directly if Brevo is used to bypass outbound SMTP blocking
-    if (emailCfg.smtpHost && emailCfg.smtpHost.includes('brevo.com') && emailCfg.smtpPass) {
+    if (emailCfg.smtpHost && emailCfg.smtpHost.toLowerCase().includes('brevo.com') && emailCfg.smtpPass) {
       console.log(`[EMAIL] 🌐 Brevo SMTP host detected. Attempting email delivery via Brevo HTTP API (Port 443)...`);
       try {
         const response = await fetch('https://api.brevo.com/v3/smtp/email', {
