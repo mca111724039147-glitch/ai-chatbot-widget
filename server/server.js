@@ -851,6 +851,52 @@ async function sendLeadEmail(lead) {
   }
 }
 
+// Run detailed SMTP/network connectivity diagnostics
+async function runSmtpDiagnostics(host) {
+  console.log(`[EMAIL DIAGNOSTICS] Starting network diagnostics for SMTP host: ${host}`);
+  const dns = require('dns').promises;
+  const net = require('net');
+  
+  // 1. DNS Resolution
+  try {
+    const addresses = await dns.resolve4(host);
+    console.log(`[EMAIL DIAGNOSTICS] DNS resolution for ${host} succeeded. IP Addresses:`, addresses);
+  } catch (dnsErr) {
+    console.error(`[EMAIL DIAGNOSTICS] DNS resolution for ${host} failed:`, dnsErr.message);
+  }
+  
+  // 2. TCP Port Connection Tests
+  const testPorts = [25, 465, 587, 2525, 80, 443];
+  for (const port of testPorts) {
+    console.log(`[EMAIL DIAGNOSTICS] Testing TCP connection to ${host}:${port}...`);
+    try {
+      const result = await new Promise((resolve) => {
+        const socket = new net.Socket();
+        socket.setTimeout(4000);
+        socket.connect(port, host, () => {
+          socket.destroy();
+          resolve({ success: true });
+        });
+        socket.on('timeout', () => {
+          socket.destroy();
+          resolve({ success: false, reason: 'timeout' });
+        });
+        socket.on('error', (err) => {
+          socket.destroy();
+          resolve({ success: false, reason: err.message });
+        });
+      });
+      if (result.success) {
+        console.log(`[EMAIL DIAGNOSTICS] ✅ TCP Connection to ${host}:${port} SUCCEEDED.`);
+      } else {
+        console.warn(`[EMAIL DIAGNOSTICS] ❌ TCP Connection to ${host}:${port} FAILED (Reason: ${result.reason}).`);
+      }
+    } catch (err) {
+      console.warn(`[EMAIL DIAGNOSTICS] ❌ TCP Connection test to ${host}:${port} encountered unexpected error:`, err.message);
+    }
+  }
+}
+
 // Welcome email notification to client
 async function sendWelcomeEmail(client, plainPassword, req) {
   const companyName = client.company_name;
@@ -894,8 +940,14 @@ async function sendWelcomeEmail(client, plainPassword, req) {
       console.log(`[EMAIL] ✅ SMTP connection verified successfully.`);
     } catch (verifyError) {
       console.error(`[EMAIL] ❌ SMTP connection verification failed:`, verifyError);
+      try {
+        await runSmtpDiagnostics(emailCfg.smtpHost);
+      } catch (diagErr) {
+        console.error(`[EMAIL] Diagnostics failed to run:`, diagErr);
+      }
       return { success: false, error: `SMTP Connection Verification Failed: ${verifyError.message}` };
     }
+
 
     // Resolve login URL: Use PUBLIC_URL if specified, otherwise fall back to host headers
     let loginUrl;
