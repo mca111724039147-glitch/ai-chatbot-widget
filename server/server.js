@@ -1130,23 +1130,25 @@ async function sendWelcomeEmail(client, plainPassword, req) {
 `;
 
     // 1. Try Brevo HTTP API directly if Brevo is used to bypass outbound SMTP blocking
-    if (emailCfg.smtpHost && emailCfg.smtpHost.toLowerCase().includes('brevo.com') && emailCfg.smtpPass) {
-      console.log(`[EMAIL] 🌐 Brevo SMTP host detected. Attempting email delivery via Brevo HTTP API (Port 443)...`);
-      try {
-        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
-          method: 'POST',
-          headers: {
-            'accept': 'application/json',
-            'api-key': emailCfg.smtpPass,
-            'content-type': 'application/json'
-          },
-          body: JSON.stringify({
-            sender: { name: 'GAdigital Solution', email: emailCfg.senderEmail },
-            to: [ { email: email } ],
-            subject: '🚀 Welcome to GAdigital Solution - Your Account is Ready!',
-            htmlContent: mailHtml
-          })
-        });
+    if (emailCfg.smtpHost && emailCfg.smtpHost.toLowerCase().includes('brevo.com')) {
+      const brevoApiKey = process.env.BREVO_API_KEY || emailCfg.smtpPass;
+      if (brevoApiKey) {
+        console.log(`[EMAIL] 🌐 Brevo SMTP host detected. Attempting email delivery via Brevo HTTP API (Port 443)...`);
+        try {
+          const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+              'accept': 'application/json',
+              'api-key': brevoApiKey,
+              'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+              sender: { name: 'GAdigital Solution', email: emailCfg.senderEmail },
+              to: [ { email: email } ],
+              subject: '🚀 Welcome to GAdigital Solution - Your Account is Ready!',
+              htmlContent: mailHtml
+            })
+          });
 
         const responseData = await response.json();
         if (response.ok) {
@@ -1161,6 +1163,7 @@ async function sendWelcomeEmail(client, plainPassword, req) {
         console.log(`[EMAIL] Falling back to standard SMTP...`);
       }
     }
+  }
 
     // 2. Standard SMTP Fallback
     console.log(`[EMAIL] Initializing SMTP transporter...`);
