@@ -1462,7 +1462,7 @@ app.post('/api/flow', (req, res) => {
 // GET /api/config — Widget loads config on init
 // GET /api/config — Widget loads config on init
 app.get('/api/config', (req, res) => {
-  const { botId, apiKey, hostname } = req.query;
+  const { botId, apiKey, hostname, type } = req.query;
   
   let config;
   if (db && botId && botId !== 'default') {
@@ -1476,8 +1476,13 @@ app.get('/api/config', (req, res) => {
       if (bot.status === 'disabled') {
         return res.status(403).json({ error: 'disabled_bot', message: 'This chatbot is currently disabled.' });
       }
-
-      config = JSON.parse(bot.config || '{}');
+      if (type === 'flow') {
+        config = JSON.parse(bot.config || '{}');
+        config.mode = 'flow';
+      } else {
+        config = JSON.parse(bot.config || '{}');
+        config.mode = 'ai';
+      }
       config.botId = bot.bot_id;
       config.apiKey = bot.api_key;
       config.status = bot.status;

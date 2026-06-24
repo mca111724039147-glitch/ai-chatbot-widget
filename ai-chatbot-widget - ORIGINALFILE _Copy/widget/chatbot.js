@@ -76,7 +76,7 @@
   // ---- Load Config ------------------------------------------
   async function loadConfig() {
     try {
-      const url = `${SERVER_URL}/api/config?botId=${encodeURIComponent(BOT_ID)}&apiKey=${encodeURIComponent(API_KEY)}&hostname=${encodeURIComponent(window.location.hostname)}`;
+      const url = `${SERVER_URL}/api/config?botId=${encodeURIComponent(BOT_ID)}&apiKey=${encodeURIComponent(API_KEY)}&type=${botType}&hostname=${encodeURIComponent(window.location.hostname)}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
